@@ -54,7 +54,7 @@ Nova tabela, pet listova. Prvi red je zaglavlje, imena kolona doslovno.
 | `Parameter` | `Schluessel` `Wert` `GueltigAb` |
 | `Konten` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Kostenstellen` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
-| `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` `OrdnerId` |
+| `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` `OrdnerId` `PwGeaendert` |
 | `Sessions` | `Token` `Email` `GueltigBis` |
 
 Popuni `Konten` i `Kostenstellen`. `Aktiv` upisuj kao `true`.
@@ -262,7 +262,8 @@ kolone poimence — ne diraj postojeći upit.
 2. Pokreni `zugangVerschicken` — obrađuje samo redove bez hasha
 3. Mejlovi idu sami, sa linkom i uputstvom za ikonu na iPhoneu
 
-**Reset lozinke:** obriši `PassHash` i `Salt` u tom redu, pokreni ponovo.
+**Reset lozinke:** obriši `PassHash`, `Salt` i `PwGeaendert` u tom redu,
+pa pokreni `zugangVerschicken` ponovo.
 **Deaktivacija:** `Aktiv` na `false`. Postojeće sesije prestaju odmah.
 **Odjava uređaja:** obriši red u `Sessions`.
 
@@ -290,6 +291,9 @@ kolone poimence — ne diraj postojeći upit.
 | 16 | Fotografija na slaboj vezi | dugme pokazuje napredak, bez tihog gubitka |
 | 17 | Dva radnika sa fotografijama istog dana | svaka slika u svom folderu |
 | 18 | Obrisan folder u Driveu, pa nova fotografija | folder se napravi ponovo |
+| 19 | Prva prijava sa lozinkom iz mejla | traži postavljanje svoje lozinke, nema preskakanja |
+| 20 | Posle promene lozinke | drugi uređaj traži ponovnu prijavu |
+| 21 | Promena lozinke sa pogrešnom starom | odbijeno |
 
 Test 1 zaključava nalog na 15 minuta — radi ga sa testnim nalogom.
 
@@ -297,10 +301,17 @@ Test 1 zaključava nalog na 15 minuta — radi ga sa testnim nalogom.
 
 ## Šta ovaj model ne pokriva
 
-**Lozinka putuje mejlom u čitljivom obliku** i ostaje u sandučetu.
-Ko ima pristup mejlu saradnika, ima i pristup formularu.
-Endpoint `passwortAendern` postoji u `Code.gs` — treba mu samo mali
-ekran u PWA, i to bih dodao pre nego što ideš u širu upotrebu.
+**Lozinka iz mejla važi samo do prve prijave.** Kolona `PwGeaendert`
+stoji na `false` dok korisnik ne postavi svoju; do tada ga aplikacija
+ne pušta dalje od ekrana za promenu. Time mejl prestaje da bude ključ
+čim se čovek jednom prijavi.
+
+Promena lozinke **poništava sve sesije** te osobe, pa se izgubljen ili
+tuđ uređaj odjavljuje sam.
+
+Ostaje da lozinka jednom prođe kroz nešifrovanu poštu. Ako i to smeta,
+zamena je Google Sign-In — `login` tada prima ID token umesto lozinke,
+ostatak arhitekture se ne menja.
 
 **Podaci su izvan tenanta firme.** Odluku o tome treba da potvrdi firma.
 
