@@ -33,11 +33,17 @@ body{
 }
 
 /* ---------- ekrani ---------- */
-.screen{display:none;flex-direction:column;height:100%}
+.screen{display:none;flex-direction:column;height:100%;align-items:center}
 .screen.aktiv{display:flex}
 .scroll{
   flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
   padding:0 var(--pad) calc(24px + env(safe-area-inset-bottom));
+}
+
+/* Na telefonu bez efekta; na desktopu drži formular u koloni
+   umjesto da se razvuče preko cijelog ekrana. */
+.scroll,.login-wrap,.kopf,.kopf-liste,.total{
+  width:100%;max-width:480px;margin-left:auto;margin-right:auto;
 }
 
 /* ---------- zaglavlje ---------- */
