@@ -17,22 +17,30 @@ korisnik ne može uneti beleg pod tuđim imenom.
 
 ```
 apps-script/
-  Code.gs                    ceo backend — prijava, unos, storno, CSV izlaz
+  Code.gs                    ceo backend — prijava, unos, Fahrt, storno, CSV
 
 pwa/
-  index.html                 sve tri stranice i kompletan CSS
-  app.js                     logika klijenta
-  config.js                  ← jedina datoteka koju obavezno mijenjaš
-  manifest.webmanifest
-  sw.js                      service worker, App-Shell cache
-  logo.svg                   ← zamijeni
+  index.html                 CIJELA aplikacija: CSS, HTML, logika, konfiguracija, logo
+  manifest.webmanifest       ime i ikone za dodavanje na home screen
   icons/icon-192.png         ← zamijeni
   icons/icon-512.png         ← zamijeni
 
 README.md                    ovaj fajl
 ```
 
-Boje su u `index.html`, u bloku `:root`. Akcentna zelena je `#8FA426`.
+Sve što se mijenja nalazi se u `index.html`, u tri označena bloka na vrhu:
+
+| Blok | Šta je unutra |
+|---|---|
+| `:root` u `<style>` | boje; akcentna zelena je `#8FA426` |
+| `<symbol id="logo">` | logotip — zamijeni sadržaj svojim SVG-om |
+| `const CONFIG` | Web-App-URL iz Apps Scripta |
+
+**Bez service workera.** Aplikacija ionako traži mrežu za svaku radnju,
+pa cache donosi samo problem zastarjele verzije. Bez njega izmjena je
+vidljiva odmah po otpremanju, bez podizanja verzije keša i bez tvrdog
+osvježavanja kod korisnika. Ikona na home screenu radi i ovako —
+na iPhoneu je nose `apple-mobile-web-app-*` meta oznake, na Androidu manifest.
 
 ---
 
@@ -96,13 +104,16 @@ Bez toga URL i dalje servira stari kod. Ovo je najčešći uzrok
 
 ## Faza 3 — PWA (~20 min)
 
-1. `pwa/config.js` → upiši Web-App-URL
-2. `pwa/logo.svg` → pravi logotip, svetla verzija sa providnom pozadinom;
-   tamni logo na crnoj podlozi nestaje
+1. `index.html` → u bloku `const CONFIG` upiši Web-App-URL
+2. `index.html` → u `<symbol id="logo">` zalijepi svoj SVG logotip;
+   svijetla verzija, jer tamni logo na crnoj podlozi nestaje
 3. `pwa/icons/` → kvadratne PNG ikone, **samo znak bez teksta**,
    oko 10% praznog ruba
 4. Objavi sadržaj foldera `pwa/` na statični host sa HTTPS —
    Cloudflare Pages, Netlify, GitHub Pages
+
+Kasnije izmjene: `index.html` uredi direktno u GitHub browseru,
+ikonica olovke → **Commit changes**. Za minut je promjena vani.
 
 HTTPS nije opcion: bez njega nema service workera, dakle nema ikone
 na home screenu.
