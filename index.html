@@ -152,6 +152,7 @@ button.gross{
   padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08);
 }
 .eintrag .oben{display:flex;justify-content:space-between;gap:12px;font-size:14px;font-weight:600}
+.trenn{color:var(--rand);font-weight:400;padding:0 2px}
 .eintrag .unten{font-size:11px;color:var(--grau);margin-top:3px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .eintrag .zellen{min-width:0}
@@ -478,6 +479,12 @@ function zahl(text) {
   const s = String(text || '').replace(/\s/g, '').replace(',', '.');
   const n = parseFloat(s);
   return isNaN(n) ? 0 : n;
+}
+ 
+/** Trennstrich blasser setzen als den Inhalt. */
+function strich(text) {
+  return String(text).split(' | ')
+    .join('<span class="trenn">|</span>');
 }
  
 /** Robust gegen Text (yyyy-mm-dd) und ISO-Zeitstempel aus Sheets. */
@@ -912,18 +919,17 @@ function zeichneListe() {
  
     // Zeile 1: Datum, dann Beleg-Nr. bzw. der Typ bei Fahrten
     const kennung = fahrt ? 'KM-Kosten' : String(b.Title || b.BelegNr || '').trim();
-    const titel   = [datum, kennung].filter(Boolean).join('   ');
+    const titel   = [datum, kennung].filter(Boolean).join(' | ');
  
     // Zeile 2: Konto und Kostenstelle mit Bezeichnung
     const konto = [b.KontoNr, b.KontoBez].filter(Boolean).join(' ');
     const kst   = [b.KstNr,   b.KstBez  ].filter(Boolean).join(' ');
-    const detail = [konto, kst].filter(Boolean).join(' · ') +
-                   (b.Bemerkung ? '   ' + b.Bemerkung : '');
+    const detail = [konto, kst, b.Bemerkung].filter(Boolean).join(' | ');
     return `
       <div class="eintrag">
         <div class="zellen">
-          <div class="oben"><span>${titel}</span><span>${chf(b.Brutto)}</span></div>
-          <div class="unten">${detail}</div>
+          <div class="oben"><span>${strich(titel)}</span><span>${chf(b.Brutto)}</span></div>
+          <div class="unten">${strich(detail)}</div>
         </div>
         <span class="foto-slot">${b.BildUrl
           ? `<button class="foto-auf" data-i="${i}" aria-label="Foto ansehen">&#128247;</button>`
