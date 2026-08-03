@@ -26,6 +26,7 @@ pwa/
   icons/icon-512.png         ← zamijeni
 
 README.md                    ovaj fajl
+EXCEL.md                     povezivanje šablona, hosting na SharePointu
 ```
 
 Sve što se mijenja nalazi se u `index.html`, u tri označena bloka na vrhu:
@@ -128,58 +129,22 @@ na home screenu.
 Provere na tom redu u `Belege`: `Mitarbeiter` je tvoje ime iz sesije,
 `Datum` je onaj koji si uneo, `MwstSatz` je `0.081`, `Storniert` je `false`.
 
-## Faza 5 — Excel (~30 min)
+## Faza 5 — Excel
 
-Šablon se ne prepravlja. Podaci ulaze u skriveni list, šablon ih
-dohvata postojećom `FILTER` formulom.
+Detaljno u **`EXCEL.md`**. Ukratko:
 
-1. **Daten → Daten abrufen → Aus anderen Quellen → Aus dem Web**
+1. **Daten → Aus dem Web**, URL sa `&format=csv`, autentifikacija **Anonym**
+2. Prvi red kao zaglavlje, tipovi kolona, upit preimenuj u **`Belege`**
+3. Učitaj u novi list, nazovi ga `Daten`, sakrij
+4. Sačuvaj kao **.xlsm** sa `Workbook_Open` makroom — na Macu je to jedini
+   način za automatsko osvežavanje
 
-   ```
-   <Web-App-URL>?token=<TOKEN_READ>&format=csv
-   ```
+CSV isporučuje tačno dvanaest kolona u fiksnom redosledu, već filtrirane od
+storniranih, sa `MwstSatz` podeljenim sa 100 i datumom u zoni Europe/Zurich.
+Dodavanje kolone u list `Belege` ne menja ništa u Excelu.
 
-   Autentifikacija: **Anonym**
-
-2. **Erste Zeile als Überschriften verwenden**
-3. Zadrži i poređaj kolone kako ih traži šablon:
-   `Datum`, `Brutto`, `MwstSatz`, `KontoNr`, `KstNr`, `Bemerkung`,
-   pa `Mitarbeiter`, `Monat`, `Jahr`
-4. Tipovi: `Datum` → Datum, novčane → Dezimalzahl, `Monat`/`Jahr` → Ganze Zahl
-5. Upit preimenuj u **`Belege`** — naziv upita postaje naziv tabele,
-   a formula u šablonu referiše `Belege[…]`
-6. **Schließen und laden in… → Tabelle → Neues Arbeitsblatt**,
-   list nazovi `Daten` i sakrij ga
-
-Filtriranje storniranih i deljenje `MwstSatz` sa 100 **ne rade se ovde** —
-Apps Script ih već isporučuje gotove.
-
-### Automatsko osvežavanje na Macu
-
-Excel za Mac nema *Aktualisieren beim Öffnen der Datei* za Power Query,
-ali VBA radi. Sačuvaj kao **.xlsm** i u `DieseArbeitsmappe`:
-
-```vba
-Private Sub Workbook_Open()
-    On Error Resume Next
-    ThisWorkbook.RefreshAll
-End Sub
-```
-
-`On Error Resume Next` je namerno: bez mreže makro tiho stane
-umesto da izbaci dijalog s greškom.
-
-### Formule u šablonu
-
-Ostaju nepromenjene. Pomoćni list `Hilfe` sa nazivima meseci u `A1:A12`,
-ćelija `$Y$1` sa `VERGLEICH`, i u prvoj ćeliji tabele:
-
-```
-=SORTIEREN(FILTER(Belege[[Datum]:[Bemerkung]];(Belege[Mitarbeiter]=$B$3)*(Belege[Monat]=$Y$1)*(Belege[Jahr]=$G$3);"");1)
-```
-
-Spojene ćelije u području u koje se formula prosipa obaraju je
-greškom `#ÜBERLAUF!` — odspoji ih pre svega ostalog.
+**Fajl na SharePointu se ne otvara iz browsera** — Excel for Web ne osvežava
+Power Query i to ne javlja. Sinhronizuj biblioteku i otvaraj ga iz Findera.
 
 ## Beleg-Foto
 
