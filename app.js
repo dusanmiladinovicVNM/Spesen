@@ -53,12 +53,19 @@ function heute() {
 /* ---------- API ---------- */
 
 async function post(payload) {
-  const res = await fetch(CONFIG.url, {
+  const res  = await fetch(CONFIG.url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload)
   });
-  return res.json();
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // Apps Script hat HTML statt JSON geliefert — echte Ursache in der Konsole
+    console.error('Antwort war kein JSON:', res.status, text.slice(0, 500));
+    throw e;
+  }
 }
 
 async function get(params) {
