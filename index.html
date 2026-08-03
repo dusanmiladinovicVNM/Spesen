@@ -110,6 +110,27 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.5)
 
 .vorschau{font-size:13px;color:var(--grau);min-height:20px;margin:12px 0 0}
 
+/* Foto */
+.foto-knopf{
+  width:100%;height:48px;border-radius:4px;background:var(--feld);
+  color:var(--text);border:1px solid var(--rand);
+  font-family:inherit;font-size:15px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.foto-knopf:active{background:#2f2f2f}
+.foto-vorschau{display:none;margin-top:8px;position:relative}
+.foto-vorschau.da{display:block}
+.foto-vorschau img{
+  width:100%;max-height:200px;object-fit:cover;
+  border-radius:4px;border:1px solid var(--rand);display:block;
+}
+.foto-weg{
+  position:absolute;top:8px;right:8px;width:32px;height:32px;
+  border-radius:16px;border:0;cursor:pointer;
+  background:rgba(0,0,0,.7);color:#fff;font-size:16px;line-height:1;
+}
+.foto-info{font-size:11px;color:var(--grau);margin-top:4px}
+
 /* ---------- dugmad ---------- */
 button.gross{
   width:100%;height:48px;border-radius:4px;
@@ -282,6 +303,19 @@ button.gross{
       <select id="fm-kst"></select>
     </div>
 
+    <div class="feld" data-nur="beleg">
+      <label>Beleg-Foto</label>
+      <button type="button" class="foto-knopf" id="fm-foto-knopf">
+        <span>&#128247;</span><span>Foto aufnehmen</span>
+      </button>
+      <input id="fm-foto" type="file" accept="image/*" capture="environment" hidden>
+      <div class="foto-vorschau" id="fm-foto-vorschau">
+        <img id="fm-foto-bild" alt="">
+        <button type="button" class="foto-weg" id="fm-foto-weg" aria-label="Foto entfernen">&times;</button>
+        <div class="foto-info" id="fm-foto-info"></div>
+      </div>
+    </div>
+
     <div class="feld">
       <label for="fm-bemerkung" id="fm-bemerkung-label">Bemerkung</label>
       <textarea id="fm-bemerkung" placeholder="Lieferant, Ort, Zweck"></textarea>
@@ -339,7 +373,7 @@ button.gross{
    URL je "Web-App-URL" iz Apps Script → Bereitstellungen verwalten.
    ══════════════════════════════════════════════════════════════ */
 const CONFIG = {
-  url: 'https://script.google.com/macros/s/AKfycbwERKKiXRwXqzgSSX7_XcFp3QImEpw5jc9ZfEqzrCXlHfJ2FOWAE52oZaWieQWF-p6Spw/exec'
+  url: 'https://script.google.com/macros/s/OVDJE_ID_DEPLOYMENTA/exec'
 };
 
 /* Spesenerfassung — Clientlogik */
@@ -355,6 +389,7 @@ const S = {
   kmSaetze: [],
   art:     'beleg',
   suffix:  0,
+  bild:    null,
   belege:  [],
   scharf:  null,          // ID reda naoružanog za storno
   laeuft:  false
@@ -499,6 +534,52 @@ function fuelleStammdaten() {
   $('fm-kst').innerHTML   = '<option value="">– wählen –</option>' + opt(S.kst);
 }
 
+/* ---------- Foto ---------- */
+
+/** Verkleinert das Kamerabild vor dem Hochladen.
+ *  Ohne diesen Schritt sind es 4–8 MB statt ~200 KB. */
+function bildVerkleinern(datei, maxKante, qualitaet) {
+  return new Promise((erfolg, fehler) => {
+    const bild = new Image();
+    const url  = URL.createObjectURL(datei);
+    bild.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = bild.naturalWidth, h = bild.naturalHeight;
+      const f = Math.min(1, maxKante / Math.max(w, h));
+      w = Math.round(w * f); h = Math.round(h * f);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(bild, 0, 0, w, h);
+      erfolg(c.toDataURL('image/jpeg', qualitaet));
+    };
+    bild.onerror = () => { URL.revokeObjectURL(url); fehler(new Error('Bild')); };
+    bild.src = url;
+  });
+}
+
+async function fotoGewaehlt(ereignis) {
+  const datei = ereignis.target.files && ereignis.target.files[0];
+  if (!datei) return;
+  try {
+    S.bild = await bildVerkleinern(datei, 1400, 0.72);
+    $('fm-foto-bild').src = S.bild;
+    $('fm-foto-vorschau').classList.add('da');
+    $('fm-foto-info').textContent =
+      Math.round(S.bild.length * 0.75 / 1024) + ' KB';
+  } catch (e) {
+    toast('Foto konnte nicht verarbeitet werden.', 'err');
+  } finally {
+    ereignis.target.value = '';
+  }
+}
+
+function fotoWeg() {
+  S.bild = null;
+  $('fm-foto-bild').removeAttribute('src');
+  $('fm-foto-vorschau').classList.remove('da');
+  $('fm-foto-info').textContent = '';
+}
+
 function setzeArt(art) {
   S.art = art;
   document.querySelectorAll('.tab').forEach(t =>
@@ -571,13 +652,14 @@ async function speichern(ersetzen) {
     kstNr:     $('fm-kst').value,
     kstBez:    kstOpt.split(' · ').slice(1).join(' · '),
     bemerkung: $('fm-bemerkung').value.trim(),
-    suffix:    S.suffix
+    suffix:    S.suffix,
+    bild:      S.bild || ''
   };
 
   S.laeuft = true;
   const btn = $('fm-speichern');
   btn.disabled = true;
-  btn.textContent = 'Speichern …';
+  btn.textContent = S.bild ? 'Foto wird geladen …' : 'Speichern …';
 
   try {
     const r = await post(daten);
@@ -661,6 +743,7 @@ function nachSpeichern() {
   $('fm-brutto').value    = '';
   $('fm-bemerkung').value = '';
   $('fm-vorschau').textContent = '';
+  fotoWeg();
   S.suffix = 0;
   $('fm-belegnr').focus();
 }
@@ -790,6 +873,9 @@ $('fm-datum').addEventListener('change', vorschau);
 $('fm-speichern').addEventListener('click', () => speichern(false));
 document.querySelectorAll('.tab').forEach(t =>
   t.addEventListener('click', () => setzeArt(t.dataset.art)));
+$('fm-foto-knopf').addEventListener('click', () => $('fm-foto').click());
+$('fm-foto').addEventListener('change', fotoGewaehlt);
+$('fm-foto-weg').addEventListener('click', fotoWeg);
 $('fm-liste').addEventListener('click', ladeListe);
 $('fm-abmelden').addEventListener('click', abmelden);
 
