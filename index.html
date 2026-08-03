@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#121212">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Spesenerfassung</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#121212;
+  --feld:#262626;
+  --akzent:#8FA426;
+  --text:#F0F0F0;
+  --grau:#969696;
+  --rand:#464646;
+  --fehler:#C84040;
+  --pad:16px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:"Open Sans",-apple-system,BlinkMacSystemFont,sans-serif;
+  font-size:15px;
+  line-height:1.35;
+  overscroll-behavior-y:none;
+}
+
+/* ---------- ekrani ---------- */
+.screen{display:none;flex-direction:column;height:100%;align-items:center}
+.screen.aktiv{display:flex}
+.scroll{
+  flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:0 var(--pad) calc(24px + env(safe-area-inset-bottom));
+}
+
+/* Na telefonu bez efekta; na desktopu drži formular u koloni
+   umjesto da se razvuče preko cijelog ekrana. */
+.scroll,.login-wrap,.kopf,.kopf-liste,.total{
+  width:100%;max-width:480px;margin-left:auto;margin-right:auto;
+}
+
+/* ---------- zaglavlje ---------- */
+.kopf{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:calc(12px + env(safe-area-inset-top)) var(--pad) 12px;
+  flex:none;
+}
+.kopf .name{font-weight:600;font-size:15px}
+.kopf .logo{height:40px;width:165px;display:block;flex:none}
+
+.kopf-liste{
+  display:flex;align-items:center;gap:12px;
+  padding:calc(12px + env(safe-area-inset-top)) var(--pad) 4px;
+  flex:none;
+}
+.kopf-liste h1{margin:0;font-size:18px;font-weight:600}
+.zurueck{
+  background:none;border:0;padding:4px;margin-left:-4px;
+  color:var(--akzent);font-size:22px;line-height:1;cursor:pointer;
+}
+.total{
+  padding:0 var(--pad) 12px;text-align:right;font-size:13px;color:var(--grau);
+  flex:none;
+}
+
+/* ---------- polja ---------- */
+label{display:block;font-size:13px;margin:12px 0 4px}
+input,select,textarea{
+  width:100%;height:48px;padding:0 12px;
+  background:var(--feld);color:var(--text);
+  border:1px solid var(--rand);border-radius:4px;
+  font-family:inherit;font-size:15px;
+  appearance:none;-webkit-appearance:none;
+}
+textarea{height:88px;padding:12px;resize:none;line-height:1.4}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--akzent)}
+input::placeholder,textarea::placeholder{color:var(--grau)}
+select{
+  padding-right:40px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'><path d='M1 1l6 6 6-6' fill='none' stroke='%238FA426' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 14px center;
+}
+input[type=date]{min-height:48px}
+input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1) opacity(.5)}
+
+.feld{margin-top:12px}
+.feld label{margin-top:0}
+.feld[hidden]{display:none}
+.zeile2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.zeile2 label{grid-column:1 / -1;margin-bottom:4px}
+
+/* Umschalter Beleg / Fahrt */
+.tabs{
+  display:grid;grid-template-columns:1fr 1fr;gap:0;
+  border:1px solid var(--rand);border-radius:4px;overflow:hidden;
+  margin-top:4px;
+}
+.tab{
+  height:40px;background:transparent;color:var(--grau);
+  border:0;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
+}
+.tab.an{background:var(--akzent);color:#000}
+
+.vorschau{font-size:13px;color:var(--grau);min-height:20px;margin:12px 0 0}
+
+/* ---------- dugmad ---------- */
+button.gross{
+  width:100%;height:48px;border-radius:4px;
+  font-family:inherit;font-size:15px;font-weight:700;
+  cursor:pointer;border:1px solid transparent;
+}
+.primaer{background:var(--akzent);color:#000;border-color:var(--akzent)}
+.primaer:active{background:#7d9021}
+.primaer:disabled{opacity:.45;cursor:default}
+.sekundaer{background:transparent;color:var(--text);border-color:var(--rand)}
+.sekundaer:active{background:#1d1d1d}
+.knopfzeile{margin-top:20px;display:flex;flex-direction:column;gap:12px}
+
+/* ---------- lista ---------- */
+.liste{padding:0 0 24px}
+.eintrag{
+  display:grid;grid-template-columns:1fr auto auto;
+  column-gap:12px;align-items:center;
+  padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08);
+}
+.eintrag .oben{display:flex;justify-content:space-between;gap:12px;font-size:14px;font-weight:600}
+.eintrag .unten{font-size:11px;color:var(--grau);margin-top:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.eintrag .zellen{min-width:0}
+.storno{
+  background:none;border:0;padding:8px;cursor:pointer;
+  color:var(--grau);font-size:16px;line-height:1;
+}
+.storno.scharf{color:var(--fehler)}
+.leer{color:var(--grau);text-align:center;padding:48px 0;font-size:14px}
+
+/* ---------- prijava ---------- */
+.login-wrap{
+  flex:1;display:flex;flex-direction:column;justify-content:center;
+  padding:0 var(--pad) 48px;
+}
+.login-wrap .logo{height:56px;width:220px;align-self:center;margin-bottom:32px}
+.login-wrap h1{font-size:20px;font-weight:600;margin:0 0 4px;text-align:center}
+.login-wrap p.sub{font-size:13px;color:var(--grau);margin:0 0 24px;text-align:center}
+
+/* ---------- poruke ---------- */
+.meldung{
+  margin-top:12px;font-size:13px;padding:10px 12px;border-radius:4px;
+  display:none;
+}
+.meldung.zeigen{display:block}
+.meldung.ok{background:rgba(143,164,38,.15);color:var(--akzent)}
+.meldung.err{background:rgba(200,64,64,.15);color:#E88}
+
+.toast{
+  position:fixed;left:var(--pad);right:var(--pad);
+  bottom:calc(20px + env(safe-area-inset-bottom));
+  background:var(--feld);border:1px solid var(--rand);border-radius:4px;
+  padding:12px 14px;font-size:14px;
+  opacity:0;transform:translateY(8px);pointer-events:none;
+  transition:opacity .18s,transform .18s;z-index:50;
+}
+.toast.zeigen{opacity:1;transform:none}
+.toast.ok{border-color:var(--akzent)}
+.toast.err{border-color:var(--fehler)}
+
+/* ---------- dijalog ---------- */
+.overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.6);
+  display:none;align-items:center;justify-content:center;padding:24px;z-index:100;
+}
+.overlay.zeigen{display:flex}
+.box{
+  background:var(--feld);border:1px solid var(--rand);border-radius:8px;
+  padding:20px;width:100%;max-width:420px;
+}
+.box p{margin:0 0 20px;font-size:14px;line-height:1.45}
+.box .knopfzeile{margin:0}
+
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- ▼▼ LOGO: zamijeni sadržaj ovog symbola svojim ▼▼ -->
+  <symbol id="logo" viewBox="0 0 220 48">
+    <text x="0" y="32" font-family="Open Sans,sans-serif" font-size="22"
+          font-weight="700" fill="#8FA426" letter-spacing="1">YEPP LOGISTICS</text>
+  </symbol>
+  <!-- ▲▲ do ovdje ▲▲ -->
+</svg>
+
+
+<!-- ============ PRIJAVA ============ -->
+<section id="scr-login" class="screen aktiv">
+  <div class="login-wrap">
+    <svg class="logo" aria-hidden="true"><use href="#logo"/></svg>
+    <h1>Spesenerfassung</h1>
+    <p class="sub">Bitte melden Sie sich an</p>
+
+    <label for="lg-email">Benutzername</label>
+    <input id="lg-email" type="email" inputmode="email" autocomplete="username"
+           autocapitalize="off" placeholder="name@firma.ch">
+
+    <label for="lg-pass">Passwort</label>
+    <input id="lg-pass" type="password" autocomplete="current-password">
+
+    <div id="lg-meldung" class="meldung err"></div>
+
+    <div class="knopfzeile">
+      <button id="lg-senden" class="gross primaer">Anmelden</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ERFASSUNG ============ -->
+<section id="scr-form" class="screen">
+  <header class="kopf">
+    <span class="name" id="fm-name"></span>
+    <svg class="logo" aria-hidden="true"><use href="#logo"/></svg>
+  </header>
+
+  <div class="scroll">
+    <div class="tabs">
+      <button class="tab an" data-art="beleg" type="button">Beleg</button>
+      <button class="tab"    data-art="fahrt" type="button">Fahrt</button>
+    </div>
+
+    <div class="feld zeile2">
+      <label>Monat / Jahr</label>
+      <select id="fm-monat"></select>
+      <select id="fm-jahr"></select>
+    </div>
+
+    <div class="feld" data-nur="beleg">
+      <label for="fm-belegnr">Beleg-Nr.</label>
+      <input id="fm-belegnr" type="text" placeholder="optional" autocapitalize="characters">
+    </div>
+
+    <div class="feld">
+      <label for="fm-datum">Datum</label>
+      <input id="fm-datum" type="date">
+    </div>
+
+    <div class="feld" data-nur="beleg">
+      <label for="fm-brutto">Betrag brutto</label>
+      <input id="fm-brutto" type="text" inputmode="decimal" placeholder="0.00">
+    </div>
+
+    <div class="feld" data-nur="beleg">
+      <label for="fm-mwst">MWSt-Satz</label>
+      <select id="fm-mwst">
+        <option value="0">0%</option>
+        <option value="2.6">2,6%</option>
+        <option value="3.8">3,8%</option>
+        <option value="8.1" selected>8,1%</option>
+      </select>
+    </div>
+
+    <div class="feld" data-nur="fahrt" hidden>
+      <label for="fm-km">Gefahrene Kilometer</label>
+      <input id="fm-km" type="text" inputmode="decimal" placeholder="0">
+    </div>
+
+    <div class="feld" data-nur="beleg">
+      <label for="fm-konto">Konto</label>
+      <select id="fm-konto"></select>
+    </div>
+
+    <div class="feld">
+      <label for="fm-kst">Kostenstelle</label>
+      <select id="fm-kst"></select>
+    </div>
+
+    <div class="feld">
+      <label for="fm-bemerkung" id="fm-bemerkung-label">Bemerkung</label>
+      <textarea id="fm-bemerkung" placeholder="Lieferant, Ort, Zweck"></textarea>
+    </div>
+
+    <p class="vorschau" id="fm-vorschau"></p>
+
+    <div class="knopfzeile">
+      <button id="fm-speichern" class="gross primaer">Speichern</button>
+      <button id="fm-liste" class="gross sekundaer">Belege anzeigen</button>
+      <button id="fm-abmelden" class="gross sekundaer">Abmelden</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ÜBERSICHT ============ -->
+<section id="scr-list" class="screen">
+  <header class="kopf-liste">
+    <button class="zurueck" id="lst-zurueck" aria-label="Zurück">&#8592;</button>
+    <h1 id="lst-titel">Belege</h1>
+  </header>
+  <div class="total" id="lst-total"></div>
+  <div class="scroll">
+    <div class="liste" id="lst-liste"></div>
+  </div>
+</section>
+
+<!-- ============ DIJALOG ZA DUPLIKAT ============ -->
+<div class="overlay" id="dlg-dup">
+  <div class="box">
+    <p>Ein Beleg mit gleichem Datum, Betrag und gleicher Beleg-Nr. ist bereits
+       erfasst. Ist dies ein zweiter, anderer Beleg?</p>
+    <div class="knopfzeile">
+      <button id="dup-ja" class="gross primaer">Ja, trotzdem erfassen</button>
+      <button id="dup-nein" class="gross sekundaer">Abbrechen</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="dlg-fahrt">
+  <div class="box">
+    <p id="dlg-fahrt-text"></p>
+    <div class="knopfzeile">
+      <button id="fahrt-ja" class="gross primaer">Ersetzen</button>
+      <button id="fahrt-nein" class="gross sekundaer">Abbrechen</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   KONFIGURACIJA — jedino što se mijenja pri postavljanju.
+   URL je "Web-App-URL" iz Apps Script → Bereitstellungen verwalten.
+   ══════════════════════════════════════════════════════════════ */
+const CONFIG = {
+  url: 'https://script.google.com/macros/s/OVDJE_ID_DEPLOYMENTA/exec'
+};
+
+/* Spesenerfassung — Clientlogik */
+
+const MONATE = ['Januar','Februar','März','April','Mai','Juni',
+                'Juli','August','September','Oktober','November','Dezember'];
+
+const S = {
+  session: localStorage.getItem('session') || '',
+  name:    localStorage.getItem('name')    || '',
+  konten:  [],
+  kst:     [],
+  kmSaetze: [],
+  art:     'beleg',
+  suffix:  0,
+  belege:  [],
+  scharf:  null,          // ID reda naoružanog za storno
+  laeuft:  false
+};
+
+const $ = id => document.getElementById(id);
+
+/* ---------- pomoćno ---------- */
+
+function zeigeScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('aktiv'));
+  $(id).classList.add('aktiv');
+  window.scrollTo(0, 0);
+}
+
+function toast(text, art) {
+  const t = $('toast');
+  t.textContent = text;
+  t.className = 'toast zeigen ' + (art || '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.className = 'toast', 3200);
+}
+
+function chf(n) {
+  return Number(n).toLocaleString('de-CH', {
+    minimumFractionDigits: 2, maximumFractionDigits: 2
+  });
+}
+
+function zahl(text) {
+  const s = String(text || '').replace(/\s/g, '').replace(',', '.');
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+
+function heute() {
+  const d = new Date();
+  const p = x => String(x).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+/* ---------- API ---------- */
+
+async function post(payload) {
+  const res  = await fetch(CONFIG.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  });
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // Apps Script hat HTML statt JSON geliefert — echte Ursache in der Konsole
+    console.error('Antwort war kein JSON:', res.status, text.slice(0, 500));
+    throw e;
+  }
+}
+
+async function get(params) {
+  const q = new URLSearchParams({ session: S.session, ...params });
+  const res = await fetch(CONFIG.url + '?' + q.toString());
+  return res.json();
+}
+
+function sessionWeg() {
+  localStorage.clear();
+  S.session = '';
+  toast('Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.', 'err');
+  zeigeScreen('scr-login');
+}
+
+/* ---------- prijava ---------- */
+
+async function anmelden() {
+  const email = $('lg-email').value.trim();
+  const pass  = $('lg-pass').value;
+  const m     = $('lg-meldung');
+  m.classList.remove('zeigen');
+
+  if (!email || !pass) {
+    m.textContent = 'Bitte Benutzername und Passwort eingeben.';
+    m.classList.add('zeigen');
+    return;
+  }
+
+  const btn = $('lg-senden');
+  btn.disabled = true;
+  btn.textContent = 'Anmelden …';
+
+  try {
+    const r = await post({ action: 'login', email, passwort: pass });
+    if (r.ok) {
+      S.session = r.session;
+      S.name    = r.name;
+      localStorage.setItem('session', r.session);
+      localStorage.setItem('name', r.name);
+      $('lg-pass').value = '';
+      await start();
+    } else {
+      m.textContent = {
+        login:    'Benutzername oder Passwort ist falsch.',
+        gesperrt: 'Zu viele Fehlversuche. Bitte in 15 Minuten erneut versuchen.',
+        inaktiv:  'Dieser Zugang ist deaktiviert. Bitte melden Sie sich bei uns.'
+      }[r.error] || 'Anmeldung nicht möglich.';
+      m.classList.add('zeigen');
+    }
+  } catch (e) {
+    m.textContent = 'Keine Verbindung. Bitte Internetverbindung prüfen.';
+    m.classList.add('zeigen');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Anmelden';
+  }
+}
+
+function abmelden() {
+  localStorage.clear();
+  S.session = '';
+  $('lg-email').value = '';
+  zeigeScreen('scr-login');
+}
+
+/* ---------- popunjavanje forme ---------- */
+
+function fuelleMonatJahr() {
+  const jetzt = new Date();
+  $('fm-monat').innerHTML = MONATE
+    .map((n, i) => `<option value="${i + 1}">${n}</option>`).join('');
+  $('fm-monat').value = jetzt.getMonth() + 1;
+
+  const j = jetzt.getFullYear();
+  $('fm-jahr').innerHTML = [j - 1, j, j + 1]
+    .map(y => `<option value="${y}">${y}</option>`).join('');
+  $('fm-jahr').value = j;
+}
+
+function fuelleStammdaten() {
+  const opt = a => a
+    .map(x => `<option value="${x.nr}">${x.nr} · ${x.bez}</option>`).join('');
+  $('fm-konto').innerHTML = '<option value="">– wählen –</option>' + opt(S.konten);
+  $('fm-kst').innerHTML   = '<option value="">– wählen –</option>' + opt(S.kst);
+}
+
+function setzeArt(art) {
+  S.art = art;
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('an', t.dataset.art === art));
+  document.querySelectorAll('[data-nur]').forEach(el =>
+    el.hidden = el.dataset.nur !== art);
+  $('fm-bemerkung').placeholder = art === 'fahrt'
+    ? 'Strecke, Zweck' : 'Lieferant, Ort, Zweck';
+  $('fm-bemerkung-label').textContent = art === 'fahrt' ? 'Strecke / Zweck' : 'Bemerkung';
+  vorschau();
+}
+
+/** Gültiger Ansatz zum Belegdatum. */
+function kmSatz(datum) {
+  let satz = null, bestAb = '';
+  S.kmSaetze.forEach(x => {
+    if (x.ab && datum && x.ab > datum) return;
+    if (satz === null || x.ab >= bestAb) { satz = x.satz; bestAb = x.ab; }
+  });
+  return satz;
+}
+
+function vorschau() {
+  const el = $('fm-vorschau');
+
+  if (S.art === 'fahrt') {
+    const km   = zahl($('fm-km').value);
+    const satz = kmSatz($('fm-datum').value);
+    if (!km || km <= 0) { el.textContent = ''; return; }
+    if (satz === null)  { el.textContent = 'Kein Kilometeransatz hinterlegt.'; return; }
+    el.textContent =
+      `${km} km × ${satz.toFixed(2)} = ${chf(Math.round(km * satz * 100) / 100)}`;
+    return;
+  }
+
+  const b = zahl($('fm-brutto').value);
+  const s = parseFloat($('fm-mwst').value);
+  if (!b || b <= 0) { el.textContent = ''; return; }
+  const mwst  = Math.round((b - b / (1 + s / 100)) * 100) / 100;
+  const netto = Math.round((b - mwst) * 100) / 100;
+  el.textContent = `MWSt: ${chf(mwst)}   Netto: ${chf(netto)}`;
+}
+
+/* ---------- snimanje ---------- */
+
+async function speichern(ersetzen) {
+  if (S.laeuft) return;
+  if (S.art === 'fahrt') return speichernFahrt(ersetzen);
+
+  const brutto = zahl($('fm-brutto').value);
+  if (!brutto || brutto <= 0) { toast('Betrag fehlt oder ist ungültig.', 'err'); return; }
+  if (!$('fm-konto').value || !$('fm-kst').value) {
+    toast('Konto und Kostenstelle sind erforderlich.', 'err'); return;
+  }
+  if (!$('fm-datum').value) { toast('Datum fehlt.', 'err'); return; }
+
+  const kontoOpt = $('fm-konto').selectedOptions[0].textContent;
+  const kstOpt   = $('fm-kst').selectedOptions[0].textContent;
+
+  const daten = {
+    session:   S.session,
+    belegNr:   $('fm-belegnr').value.trim(),
+    datum:     $('fm-datum').value,
+    monat:     $('fm-monat').value,
+    jahr:      $('fm-jahr').value,
+    brutto:    brutto,
+    mwstSatz:  parseFloat($('fm-mwst').value),
+    kontoNr:   $('fm-konto').value,
+    kontoBez:  kontoOpt.split(' · ').slice(1).join(' · '),
+    kstNr:     $('fm-kst').value,
+    kstBez:    kstOpt.split(' · ').slice(1).join(' · '),
+    bemerkung: $('fm-bemerkung').value.trim(),
+    suffix:    S.suffix
+  };
+
+  S.laeuft = true;
+  const btn = $('fm-speichern');
+  btn.disabled = true;
+  btn.textContent = 'Speichern …';
+
+  try {
+    const r = await post(daten);
+
+    if (r.ok) {
+      toast('Beleg gespeichert.', 'ok');
+      nachSpeichern();
+    } else if (r.error === 'session') {
+      sessionWeg();
+    } else if (r.error === 'duplikat') {
+      $('dlg-dup').classList.add('zeigen');
+    } else {
+      toast('Speichern nicht möglich: ' + (r.error || 'unbekannt'), 'err');
+    }
+  } catch (e) {
+    toast('Keine Verbindung. Der Beleg wurde nicht gespeichert.', 'err');
+  } finally {
+    S.laeuft = false;
+    btn.disabled = false;
+    btn.textContent = 'Speichern';
+  }
+}
+
+async function speichernFahrt(ersetzen) {
+  const km = zahl($('fm-km').value);
+  if (!km || km <= 0)      { toast('Kilometer fehlen.', 'err'); return; }
+  if (!$('fm-datum').value) { toast('Datum fehlt.', 'err'); return; }
+  if (!$('fm-kst').value)   { toast('Kostenstelle ist erforderlich.', 'err'); return; }
+
+  const kstOpt = $('fm-kst').selectedOptions[0].textContent;
+
+  S.laeuft = true;
+  const btn = $('fm-speichern');
+  btn.disabled = true;
+  btn.textContent = 'Speichern …';
+
+  try {
+    const r = await post({
+      session:   S.session,
+      art:       'fahrt',
+      km:        km,
+      datum:     $('fm-datum').value,
+      monat:     $('fm-monat').value,
+      jahr:      $('fm-jahr').value,
+      kstNr:     $('fm-kst').value,
+      kstBez:    kstOpt.split(' · ').slice(1).join(' · '),
+      bemerkung: $('fm-bemerkung').value.trim(),
+      ersetzen:  !!ersetzen
+    });
+
+    if (r.ok) {
+      toast(r.ersetzt ? 'Fahrt ersetzt.' : 'Fahrt gespeichert.', 'ok');
+      $('fm-km').value = '';
+      $('fm-bemerkung').value = '';
+      $('fm-vorschau').textContent = '';
+    } else if (r.error === 'session') {
+      sessionWeg();
+    } else if (r.error === 'fahrt-existiert') {
+      $('dlg-fahrt-text').textContent =
+        'Für dieses Datum sind bereits ' + r.km + ' km erfasst. ' +
+        'Möchten Sie den Eintrag durch ' + km + ' km ersetzen?';
+      $('dlg-fahrt').classList.add('zeigen');
+    } else {
+      toast({
+        kmsatz:  'Für dieses Datum ist kein Kilometeransatz hinterlegt.',
+        kmkonto: 'Kein Konto für Kilometerkosten hinterlegt.'
+      }[r.error] || 'Speichern nicht möglich: ' + (r.error || 'unbekannt'), 'err');
+    }
+  } catch (e) {
+    toast('Keine Verbindung. Die Fahrt wurde nicht gespeichert.', 'err');
+  } finally {
+    S.laeuft = false;
+    btn.disabled = false;
+    btn.textContent = 'Speichern';
+  }
+}
+
+/* Monat, Jahr, Konto i Kostenstelle namerno ostaju — Speichern & neu */
+function nachSpeichern() {
+  $('fm-belegnr').value   = '';
+  $('fm-brutto').value    = '';
+  $('fm-bemerkung').value = '';
+  $('fm-vorschau').textContent = '';
+  S.suffix = 0;
+  $('fm-belegnr').focus();
+}
+
+/* ---------- pregled ---------- */
+
+async function ladeListe() {
+  const monat = $('fm-monat').value;
+  const jahr  = $('fm-jahr').value;
+
+  $('lst-titel').textContent = 'Belege ' + MONATE[monat - 1] + ' ' + jahr;
+  $('lst-liste').innerHTML   = '<div class="leer">Wird geladen …</div>';
+  $('lst-total').textContent = '';
+  S.scharf = null;
+  zeigeScreen('scr-list');
+
+  try {
+    const r = await get({ action: 'meine', monat, jahr });
+    if (!r.ok) { if (r.error === 'session') sessionWeg(); return; }
+    S.belege = r.belege || [];
+    zeichneListe();
+  } catch (e) {
+    $('lst-liste').innerHTML =
+      '<div class="leer">Keine Verbindung. Bitte später erneut versuchen.</div>';
+  }
+}
+
+function zeichneListe() {
+  const el = $('lst-liste');
+
+  if (!S.belege.length) {
+    el.innerHTML = '<div class="leer">Keine Belege in diesem Monat.</div>';
+    $('lst-total').textContent = '';
+    return;
+  }
+
+  const summe = S.belege.reduce((a, b) => a + Number(b.Brutto || 0), 0);
+  $('lst-total').textContent = 'Total: ' + chf(summe);
+
+  el.innerHTML = S.belege.map((b, i) => {
+    const d = String(b.Datum || '').split('-');
+    const datum = d.length === 3 ? `${d[2]}.${d[1]}.${d[0]}` : b.Datum;
+    const detail = [b.KontoNr, b.KstNr].filter(Boolean).join(' · ') +
+                   (b.Bemerkung ? '   ' + b.Bemerkung : '');
+    return `
+      <div class="eintrag">
+        <div class="zellen">
+          <div class="oben"><span>${datum}</span><span>${chf(b.Brutto)}</span></div>
+          <div class="unten">${detail}</div>
+        </div>
+        <button class="storno" data-i="${i}" aria-label="Stornieren">&#128465;</button>
+      </div>`;
+  }).join('');
+
+  el.querySelectorAll('.storno').forEach(btn => {
+    btn.addEventListener('click', () => stornoKlick(Number(btn.dataset.i), btn));
+  });
+}
+
+/* Prvi dodir naoruža, drugi izvrši — lista se skroluje prstom */
+async function stornoKlick(i, btn) {
+  if (S.scharf !== i) {
+    S.scharf = i;
+    document.querySelectorAll('.storno').forEach(b => b.classList.remove('scharf'));
+    btn.classList.add('scharf');
+    btn.innerHTML = '&#10003;';
+    toast('Nochmals tippen zum Stornieren.', '');
+    return;
+  }
+
+  const beleg = S.belege[i];
+  try {
+    const r = await post({
+      session: S.session, action: 'storno', zeile: beleg._zeile
+    });
+    if (r.ok) {
+      S.belege.splice(i, 1);
+      S.scharf = null;
+      zeichneListe();
+      toast('Beleg storniert.', 'ok');
+    } else if (r.error === 'session') {
+      sessionWeg();
+    } else {
+      toast('Stornieren nicht möglich: ' + (r.error || 'unbekannt'), 'err');
+    }
+  } catch (e) {
+    toast('Keine Verbindung.', 'err');
+  }
+}
+
+/* ---------- start ---------- */
+
+async function start() {
+  $('fm-name').textContent = S.name;
+  fuelleMonatJahr();
+  $('fm-datum').value = heute();
+  zeigeScreen('scr-form');
+
+  // keširane master liste odmah, pa osvežavanje u pozadini
+  const cache = localStorage.getItem('stammdaten');
+  if (cache) {
+    const c = JSON.parse(cache);
+    S.konten = c.konten; S.kst = c.kostenstellen; S.kmSaetze = c.kmSaetze || [];
+    fuelleStammdaten();
+  }
+
+  try {
+    const r = await get({ action: 'stammdaten' });
+    if (!r.ok) { if (r.error === 'session') sessionWeg(); return; }
+    S.konten = r.konten; S.kst = r.kostenstellen; S.kmSaetze = r.kmSaetze || [];
+    localStorage.setItem('stammdaten', JSON.stringify(r));
+    fuelleStammdaten();
+  } catch (e) {
+    if (!cache) toast('Konto- und Kostenstellenliste konnte nicht geladen werden.', 'err');
+  }
+}
+
+/* ---------- vezivanje ---------- */
+
+$('lg-senden').addEventListener('click', anmelden);
+$('lg-pass').addEventListener('keydown', e => { if (e.key === 'Enter') anmelden(); });
+
+$('fm-brutto').addEventListener('input', vorschau);
+$('fm-km').addEventListener('input', vorschau);
+$('fm-mwst').addEventListener('change', vorschau);
+$('fm-datum').addEventListener('change', vorschau);
+$('fm-speichern').addEventListener('click', () => speichern(false));
+document.querySelectorAll('.tab').forEach(t =>
+  t.addEventListener('click', () => setzeArt(t.dataset.art)));
+$('fm-liste').addEventListener('click', ladeListe);
+$('fm-abmelden').addEventListener('click', abmelden);
+
+$('lst-zurueck').addEventListener('click', () => zeigeScreen('scr-form'));
+
+$('dup-nein').addEventListener('click', () => $('dlg-dup').classList.remove('zeigen'));
+$('dup-ja').addEventListener('click', () => {
+  $('dlg-dup').classList.remove('zeigen');
+  S.suffix += 1;
+  speichern(false);
+});
+
+$('fahrt-nein').addEventListener('click', () => $('dlg-fahrt').classList.remove('zeigen'));
+$('fahrt-ja').addEventListener('click', () => {
+  $('dlg-fahrt').classList.remove('zeigen');
+  speichern(true);
+});
+
+if (S.session) start(); else zeigeScreen('scr-login');
+</script>
+</body>
+</html>
