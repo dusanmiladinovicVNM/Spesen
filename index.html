@@ -147,7 +147,7 @@ button.gross{
 /* ---------- lista ---------- */
 .liste{padding:0 0 24px}
 .eintrag{
-  display:grid;grid-template-columns:1fr auto auto;
+  display:grid;grid-template-columns:1fr auto auto auto;
   column-gap:12px;align-items:center;
   padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08);
 }
@@ -155,10 +155,11 @@ button.gross{
 .eintrag .unten{font-size:11px;color:var(--grau);margin-top:3px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .eintrag .zellen{min-width:0}
-.storno{
+.storno,.foto-auf{
   background:none;border:0;padding:8px;cursor:pointer;
   color:var(--grau);font-size:16px;line-height:1;
 }
+.foto-auf{color:var(--akzent)}
 .storno.scharf{color:var(--fehler)}
 .leer{color:var(--grau);text-align:center;padding:48px 0;font-size:14px}
 
@@ -198,6 +199,12 @@ button.gross{
   display:none;align-items:center;justify-content:center;padding:24px;z-index:100;
 }
 .overlay.zeigen{display:flex}
+.bild-box{width:100%;max-width:640px;text-align:center}
+.bild-box img{
+  max-width:100%;max-height:72vh;border-radius:4px;
+  border:1px solid var(--rand);display:block;margin:0 auto 16px;
+}
+.bild-box .laedt{color:var(--grau);font-size:14px;padding:48px 0}
 .box{
   background:var(--feld);border:1px solid var(--rand);border-radius:8px;
   padding:20px;width:100%;max-width:420px;
@@ -365,6 +372,14 @@ button.gross{
   </div>
 </div>
 
+<div class="overlay" id="dlg-bild">
+  <div class="bild-box">
+    <div class="laedt" id="bild-laedt">Bild wird geladen …</div>
+    <img id="bild-gross" alt="" hidden>
+    <button id="bild-zu" class="gross sekundaer">Schliessen</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -373,7 +388,7 @@ button.gross{
    URL je "Web-App-URL" iz Apps Script → Bereitstellungen verwalten.
    ══════════════════════════════════════════════════════════════ */
 const CONFIG = {
-  url: 'https://script.google.com/macros/s/AKfycbwERKKiXRwXqzgSSX7_XcFp3QImEpw5jc9ZfEqzrCXlHfJ2FOWAE52oZaWieQWF-p6Spw/exec'
+  url: 'https://script.google.com/macros/s/OVDJE_ID_DEPLOYMENTA/exec'
 };
 
 /* Spesenerfassung — Clientlogik */
@@ -794,6 +809,9 @@ function zeichneListe() {
           <div class="oben"><span>${datum}</span><span>${chf(b.Brutto)}</span></div>
           <div class="unten">${detail}</div>
         </div>
+        ${b.BildUrl
+          ? `<button class="foto-auf" data-i="${i}" aria-label="Foto ansehen">&#128247;</button>`
+          : '<span></span>'}
         <button class="storno" data-i="${i}" aria-label="Stornieren">&#128465;</button>
       </div>`;
   }).join('');
@@ -801,6 +819,34 @@ function zeichneListe() {
   el.querySelectorAll('.storno').forEach(btn => {
     btn.addEventListener('click', () => stornoKlick(Number(btn.dataset.i), btn));
   });
+  el.querySelectorAll('.foto-auf').forEach(btn => {
+    btn.addEventListener('click', () => bildZeigen(Number(btn.dataset.i)));
+  });
+}
+
+async function bildZeigen(i) {
+  const beleg = S.belege[i];
+  $('bild-gross').hidden = true;
+  $('bild-gross').removeAttribute('src');
+  $('bild-laedt').hidden = false;
+  $('bild-laedt').textContent = 'Bild wird geladen …';
+  $('dlg-bild').classList.add('zeigen');
+
+  try {
+    const r = await get({ action: 'bild', zeile: beleg._zeile });
+    if (r.ok) {
+      $('bild-gross').src = r.bild;
+      $('bild-gross').hidden = false;
+      $('bild-laedt').hidden = true;
+    } else if (r.error === 'session') {
+      $('dlg-bild').classList.remove('zeigen');
+      sessionWeg();
+    } else {
+      $('bild-laedt').textContent = 'Bild nicht verfügbar: ' + (r.error || 'unbekannt');
+    }
+  } catch (e) {
+    $('bild-laedt').textContent = 'Keine Verbindung.';
+  }
 }
 
 /* Prvi dodir naoruža, drugi izvrši — lista se skroluje prstom */
@@ -880,6 +926,10 @@ $('fm-liste').addEventListener('click', ladeListe);
 $('fm-abmelden').addEventListener('click', abmelden);
 
 $('lst-zurueck').addEventListener('click', () => zeigeScreen('scr-form'));
+$('bild-zu').addEventListener('click', () => $('dlg-bild').classList.remove('zeigen'));
+$('dlg-bild').addEventListener('click', e => {
+  if (e.target.id === 'dlg-bild') $('dlg-bild').classList.remove('zeigen');
+});
 
 $('dup-nein').addEventListener('click', () => $('dlg-dup').classList.remove('zeigen'));
 $('dup-ja').addEventListener('click', () => {
