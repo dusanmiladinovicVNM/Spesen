@@ -42,7 +42,8 @@ Nova tabela, pet listova. Prvi red je zaglavlje, imena kolona doslovno.
 
 | List | Kolone |
 |---|---|
-| `Belege` | `Zeitstempel` `Mitarbeiter` `Email` `BelegNr` `Datum` `Monat` `Jahr` `Brutto` `MwstSatz` `MwstBetrag` `Netto` `KontoNr` `KontoBez` `KstNr` `KstBez` `Bemerkung` `DedupKey` `Storniert` |
+| `Belege` | `Zeitstempel` `Mitarbeiter` `Email` `BelegNr` `Datum` `Monat` `Jahr` `Brutto` `MwstSatz` `MwstBetrag` `Netto` `KontoNr` `KontoBez` `KstNr` `KstBez` `Bemerkung` `DedupKey` `Storniert` `Art` `KM` `KmSatz` |
+| `Parameter` | `Schluessel` `Wert` `GueltigAb` |
 | `Konten` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Kostenstellen` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` |
@@ -51,7 +52,18 @@ Nova tabela, pet listova. Prvi red je zaglavlje, imena kolona doslovno.
 Popuni `Konten` i `Kostenstellen`. `Aktiv` upisuj kao `true`.
 `Sortierung` ostavi sa rupama (10, 20, 30) da kasnije možeš ubaciti nešto između.
 
-**Kolonu `Datum` u `Belege` formatiraj kao običan tekst** —
+U `Parameter` upiši najmanje dva reda:
+
+| `Schluessel` | `Wert` | `GueltigAb` |
+|---|---|---|
+| `KmSatz` | `0.70` | `2026-01-01` |
+| `KmKonto` | `6210` | |
+
+`KmSatz` sme imati više redova sa različitim `GueltigAb` — server bira onaj
+koji važi na datum belega. `KmKonto` je konto na koji se knjiže kilometri;
+mora postojati u listu `Konten`.
+
+**Kolone `Datum` i `GueltigAb` formatiraj kao običan tekst** —
 `Format → Zahl → Nur Text`. Inače Sheets tumači `2026-07-31` kao datum
 i vraća pomak vremenske zone.
 
@@ -158,6 +170,22 @@ Ostaju nepromenjene. Pomoćni list `Hilfe` sa nazivima meseci u `A1:A12`,
 Spojene ćelije u području u koje se formula prosipa obaraju je
 greškom `#ÜBERLAUF!` — odspoji ih pre svega ostalog.
 
+## Kilometerkosten
+
+U formularu je prekidač **Beleg / Fahrt**. Kod vožnje korisnik unosi samo
+datum, broj kilometara i kostenstelle; iznos se računa kao `km × KmSatz`.
+
+Red završava u istom listu `Belege` sa `Art = Fahrt`, `MwstSatz = 0`
+i `Bemerkung` u obliku `120 km à 0.70 — Zürich–Bern`. Excel šablon se
+ne menja: vožnja je za njega običan red.
+
+**Jedan unos po osobi i danu.** Ponovni unos za isti datum ne pravi drugi
+red nego nudi zamenu postojećeg. Ključ je `email|datum|fahrt`.
+
+Kolone `Art`, `KM` i `KmSatz` stoje na kraju lista i služe za kontrolu.
+Power Query ih ne povlači, jer korak *Andere Spalten entfernen* nabraja
+kolone poimence — ne diraj postojeći upit.
+
 ## Faza 6 — Saradnici
 
 1. Upiši sve u `Benutzer`, po jedan red, samo `Email` i `Name`
@@ -184,6 +212,9 @@ greškom `#ÜBERLAUF!` — odspoji ih pre svega ostalog.
 | 8 | Prijava kolege | vidi samo svoje belege |
 | 9 | Avionski režim, pa Speichern | jasna poruka, bez tihog gubitka |
 | 10 | Ikona na home screenu, ponovno otvaranje | prijava se ne traži |
+| 11 | Fahrt: 120 km pri stopi 0.70 | `Brutto` 84.00, `MwstSatz` 0 |
+| 12 | Druga Fahrt za isti dan | pitanje o zameni, ne drugi red |
+| 13 | Fahrt sa datumom pre `GueltigAb` nove stope | računa se sa starom stopom |
 
 Test 1 zaključava nalog na 15 minuta — radi ga sa testnim nalogom.
 
