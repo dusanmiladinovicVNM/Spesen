@@ -1,5 +1,5 @@
 /* App-Shell cache. API pozivi nikada ne idu iz keša. */
-const CACHE = 'spesen-v1';
+const CACHE = 'spesen-v2';
 const SHELL = ['./', 'index.html', 'app.js', 'config.js',
                'logo.svg', 'manifest.webmanifest'];
 
