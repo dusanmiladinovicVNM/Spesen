@@ -480,6 +480,13 @@ function zahl(text) {
   return isNaN(n) ? 0 : n;
 }
  
+/** Robust gegen Text (yyyy-mm-dd) und ISO-Zeitstempel aus Sheets. */
+function datumText(wert) {
+  const s = String(wert || '');
+  const t = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return t ? `${t[3]}.${t[2]}.${t[1]}` : s;
+}
+ 
 function heute() {
   const d = new Date();
   const p = x => String(x).padStart(2, '0');
@@ -900,14 +907,22 @@ function zeichneListe() {
   $('lst-total').textContent = 'Total: ' + chf(summe);
  
   el.innerHTML = S.belege.map((b, i) => {
-    const d = String(b.Datum || '').split('-');
-    const datum = d.length === 3 ? `${d[2]}.${d[1]}.${d[0]}` : b.Datum;
-    const detail = [b.KontoNr, b.KstNr].filter(Boolean).join(' · ') +
+    const fahrt = String(b.Art || '').toLowerCase() === 'fahrt';
+    const datum = datumText(b.Datum);
+ 
+    // Zeile 1: Datum, dann Beleg-Nr. bzw. der Typ bei Fahrten
+    const kennung = fahrt ? 'KM-Kosten' : String(b.Title || b.BelegNr || '').trim();
+    const titel   = [datum, kennung].filter(Boolean).join('   ');
+ 
+    // Zeile 2: Konto und Kostenstelle mit Bezeichnung
+    const konto = [b.KontoNr, b.KontoBez].filter(Boolean).join(' ');
+    const kst   = [b.KstNr,   b.KstBez  ].filter(Boolean).join(' ');
+    const detail = [konto, kst].filter(Boolean).join(' · ') +
                    (b.Bemerkung ? '   ' + b.Bemerkung : '');
     return `
       <div class="eintrag">
         <div class="zellen">
-          <div class="oben"><span>${datum}</span><span>${chf(b.Brutto)}</span></div>
+          <div class="oben"><span>${titel}</span><span>${chf(b.Brutto)}</span></div>
           <div class="unten">${detail}</div>
         </div>
         <span class="foto-slot">${b.BildUrl
