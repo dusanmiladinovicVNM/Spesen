@@ -52,8 +52,8 @@ body{
   padding:calc(12px + env(safe-area-inset-top)) var(--pad) 12px;
   flex:none;
 }
-.kopf .name{font-weight:600;font-size:15px}
-.kopf .logo{width:180px;height:46px;display:block;flex:none}
+.kopf .name{font-weight:600;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kopf .logo{width:270px;height:70px;display:block;flex:none}
  
 .kopf-liste{
   display:flex;align-items:center;gap:12px;
@@ -175,7 +175,7 @@ button.gross{
   flex:1;display:flex;flex-direction:column;justify-content:center;
   padding:0 var(--pad) 48px;
 }
-.login-wrap .logo{width:320px;height:83px;max-width:80%;align-self:center;margin-bottom:36px}
+.login-wrap .logo{width:480px;height:124px;max-width:86%;align-self:center;margin-bottom:36px}
 .login-wrap h1{font-size:20px;font-weight:600;margin:0 0 4px;text-align:center}
 .login-wrap p.sub{font-size:13px;color:var(--grau);margin:0 0 24px;text-align:center}
  
