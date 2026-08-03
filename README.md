@@ -50,11 +50,11 @@ Nova tabela, pet listova. Prvi red je zaglavlje, imena kolona doslovno.
 
 | List | Kolone |
 |---|---|
-| `Belege` | `Zeitstempel` `Mitarbeiter` `Email` `BelegNr` `Datum` `Monat` `Jahr` `Brutto` `MwstSatz` `MwstBetrag` `Netto` `KontoNr` `KontoBez` `KstNr` `KstBez` `Bemerkung` `DedupKey` `Storniert` `Art` `KM` `KmSatz` |
+| `Belege` | `Zeitstempel` `Mitarbeiter` `Email` `BelegNr` `Datum` `Monat` `Jahr` `Brutto` `MwstSatz` `MwstBetrag` `Netto` `KontoNr` `KontoBez` `KstNr` `KstBez` `Bemerkung` `DedupKey` `Storniert` `Art` `KM` `KmSatz` `BildUrl` |
 | `Parameter` | `Schluessel` `Wert` `GueltigAb` |
 | `Konten` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Kostenstellen` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
-| `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` |
+| `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` `OrdnerId` |
 | `Sessions` | `Token` `Email` `GueltigBis` |
 
 Popuni `Konten` i `Kostenstellen`. `Aktiv` upisuj kao `true`.
@@ -181,6 +181,65 @@ Ostaju nepromenjene. Pomoćni list `Hilfe` sa nazivima meseci u `A1:A12`,
 Spojene ćelije u području u koje se formula prosipa obaraju je
 greškom `#ÜBERLAUF!` — odspoji ih pre svega ostalog.
 
+## Beleg-Foto
+
+Fotografija ide u **Google Drive**, u tabelu samo link. Ćelija u Sheetsu
+ima granicu od 50.000 znakova, pa slika u njoj nije opcija.
+
+**Struktura foldera** — svaki radnik ima svoj:
+
+```
+Belegfotos/                        ← BILD_ORDNER
+├── Dusan Miladinovic/
+│   ├── 2026-07/
+│   │   ├── 2026-07-14_45.80_R1123.jpg
+│   │   └── 2026-07-31_12.00.jpg
+│   └── 2026-08/
+└── Peter Muster/
+    └── 2026-08/
+```
+
+Mesečni podfolder isključuješ sa `BILD_MONATSORDNER = false`.
+
+**Postavljanje:**
+
+1. Napravi korenski folder, npr. `Belegfotos`
+2. Iz URL-a prepiši ID i upiši ga u `BILD_ORDNER` u `Code.gs`
+3. Dodaj kolonu `OrdnerId` na kraj lista `Benutzer` — ostavi je praznu
+4. Pokreni `ordnerAnlegen()` u editoru; pravi foldere za sve i upisuje ID-eve
+5. Prvi put Apps Script traži dozvolu za Drive — potvrdi
+
+Korak 4 nije obavezan — folder se napravi i pri prvoj fotografiji. Ali se
+tada pravi **dok korisnik čeka**, pa je bolje uraditi to unapred.
+
+**Vezu drži ID, ne naziv.** Dva radnika smeju se zvati isto; naziv foldera
+je kozmetika i sme se preimenovati u Driveu bez ikakve posledice.
+Ako neko obriše folder, sledeća fotografija pravi novi.
+
+**Slika se smanjuje u browseru** pre slanja — 1400 px duža ivica,
+JPEG 72%, oko 200 KB. Bez tog koraka fotografija sa telefona je 4–8 MB,
+u base64 preko 10 MB, i pada i Apps Script i mobilna veza.
+
+**Dozvole.** Podrazumevano su fajlovi privatni (`BILD_OEFFENTLICH = false`).
+Podeli **korenski folder** sa Google nalogom knjigovodstva — pristup se
+nasleđuje na sve podfoldere, i to je jedina postavka koju treba dirati.
+
+Radnicima ne treba pristup Driveu; oni šalju kroz aplikaciju.
+
+Ako knjigovodstvo nema Google nalog, postavi `BILD_OEFFENTLICH = true` —
+tada link iz kolone `BildUrl` radi bez prijave. Cena je da svako ko dobije
+link vidi taj račun.
+
+**Excel.** Kolona `BildUrl` ostaje izvan šablona. Knjigovodstvo otvara
+sam Drive folder — struktura `Osoba / Mesec / Datum_Iznos` prati način
+na koji ionako rade mesečni obračun.
+Ako link ipak treba u tabeli, dodaj `BildUrl` u Power Query i u prvoj
+slobodnoj koloni pored tabele stavi `=HYPERLINK(...)` — šablon se time
+ne dira, samo se proširuje udesno.
+
+**Storno ne briše sliku.** Storniranje je povratno, pa fajl ostaje.
+Čišćenje po potrebi radi ručno u Driveu.
+
 ## Kilometerkosten
 
 U formularu je prekidač **Beleg / Fahrt**. Kod vožnje korisnik unosi samo
@@ -226,6 +285,11 @@ kolone poimence — ne diraj postojeći upit.
 | 11 | Fahrt: 120 km pri stopi 0.70 | `Brutto` 84.00, `MwstSatz` 0 |
 | 12 | Druga Fahrt za isti dan | pitanje o zameni, ne drugi red |
 | 13 | Fahrt sa datumom pre `GueltigAb` nove stope | računa se sa starom stopom |
+| 14 | Beleg sa fotografijom | fajl u Driveu, link u `BildUrl` |
+| 15 | Beleg bez fotografije | prolazi normalno, `BildUrl` prazan |
+| 16 | Fotografija na slaboj vezi | dugme pokazuje napredak, bez tihog gubitka |
+| 17 | Dva radnika sa fotografijama istog dana | svaka slika u svom folderu |
+| 18 | Obrisan folder u Driveu, pa nova fotografija | folder se napravi ponovo |
 
 Test 1 zaključava nalog na 15 minuta — radi ga sa testnim nalogom.
 
