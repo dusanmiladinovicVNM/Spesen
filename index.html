@@ -170,6 +170,35 @@ button.gross{
 .storno.scharf{color:var(--fehler)}
 .leer{color:var(--grau);text-align:center;padding:48px 0;font-size:14px}
  
+/* Admin */
+.nutzer{padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08)}
+.nutzer .zeile1{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.nutzer .nm{font-size:14px;font-weight:600}
+.nutzer .ml{font-size:11px;color:var(--grau);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.marke{font-size:10px;padding:2px 6px;border-radius:3px;white-space:nowrap}
+.marke.aus{background:rgba(200,64,64,.18);color:#E88}
+.marke.adm{background:rgba(143,164,38,.18);color:var(--akzent)}
+.marke.neu{background:rgba(255,255,255,.08);color:var(--grau)}
+.nutzer .tasten{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.klein{
+  background:transparent;color:var(--text);border:1px solid var(--rand);
+  border-radius:3px;padding:6px 10px;font-family:inherit;font-size:12px;cursor:pointer;
+}
+.klein:active{background:#1d1d1d}
+.klein[disabled]{opacity:.35;cursor:default}
+.trennlinie{border:0;border-top:1px solid var(--rand);margin:24px 0 8px}
+.pwfeld{
+  background:#1a1a1a;border:1px solid var(--akzent);border-radius:4px;
+  padding:14px;margin:12px 0;text-align:center;
+}
+.pwfeld .wert{
+  font-family:"SFMono-Regular",Menlo,Consolas,monospace;
+  font-size:22px;letter-spacing:1px;color:var(--akzent);
+  user-select:all;-webkit-user-select:all;word-break:break-all;
+}
+.pwfeld .wem{font-size:12px;color:var(--grau);margin-bottom:8px}
+ 
 /* ---------- prijava ---------- */
 .login-wrap{
   flex:1;display:flex;flex-direction:column;justify-content:center;
@@ -370,6 +399,7 @@ button.gross{
     <div class="knopfzeile">
       <button id="fm-speichern" class="gross primaer">Speichern</button>
       <button id="fm-liste" class="gross sekundaer">Belege anzeigen</button>
+      <button id="fm-admin" class="gross sekundaer" hidden>Benutzer verwalten</button>
       <button id="fm-passwort" class="gross sekundaer">Passwort ändern</button>
       <button id="fm-abmelden" class="gross sekundaer">Abmelden</button>
     </div>
@@ -385,6 +415,32 @@ button.gross{
   <div class="total" id="lst-total"></div>
   <div class="scroll">
     <div class="liste" id="lst-liste"></div>
+  </div>
+</section>
+ 
+<!-- ============ ADMIN ============ -->
+<section id="scr-admin" class="screen">
+  <header class="kopf-liste">
+    <button class="zurueck" id="adm-zurueck" aria-label="Zurück">&#8592;</button>
+    <h1>Benutzer verwalten</h1>
+  </header>
+ 
+  <div class="scroll">
+    <label for="adm-name">Name</label>
+    <input id="adm-name" type="text" placeholder="Vorname Nachname">
+ 
+    <label for="adm-email">E-Mail</label>
+    <input id="adm-email" type="email" inputmode="email"
+           autocapitalize="off" placeholder="name@firma.ch">
+ 
+    <div id="adm-meldung" class="meldung err"></div>
+ 
+    <div class="knopfzeile">
+      <button id="adm-neu" class="gross primaer">Benutzer anlegen und Zugang senden</button>
+    </div>
+ 
+    <hr class="trennlinie">
+    <div id="adm-liste"></div>
   </div>
 </section>
  
@@ -406,6 +462,24 @@ button.gross{
     <div class="knopfzeile">
       <button id="fahrt-ja" class="gross primaer">Ersetzen</button>
       <button id="fahrt-nein" class="gross sekundaer">Abbrechen</button>
+    </div>
+  </div>
+</div>
+ 
+<div class="overlay" id="dlg-pw">
+  <div class="box">
+    <p><b>Zugang angelegt</b><br>
+       Das Mail mit dem Link ist unterwegs. Das Passwort steht nicht darin —
+       bitte separat übermitteln, zum Beispiel per SMS.</p>
+    <div class="pwfeld">
+      <div class="wem" id="pw-wem"></div>
+      <div class="wert" id="pw-wert"></div>
+    </div>
+    <p style="font-size:12px;color:var(--grau)">Das Passwort wird nur jetzt
+       angezeigt. Es gilt bis zur ersten Anmeldung.</p>
+    <div class="knopfzeile">
+      <button id="pw-kopieren" class="gross primaer">Passwort kopieren</button>
+      <button id="pw-fertig" class="gross sekundaer">Fertig</button>
     </div>
   </div>
 </div>
@@ -445,6 +519,7 @@ const S = {
   bild:    null,
   altPass: '',        // nur im Speicher, für den erzwungenen Wechsel
   pwPflicht: false,
+  rolle:   localStorage.getItem('rolle') || '',
   belege:  [],
   scharf:  null,          // ID reda naoružanog za storno
   laeuft:  false
@@ -554,8 +629,10 @@ async function anmelden() {
       S.session = r.session;
       S.name    = r.name;
       S.altPass = pass;
+      S.rolle   = r.rolle || '';
       localStorage.setItem('session', r.session);
       localStorage.setItem('name', r.name);
+      localStorage.setItem('rolle', S.rolle);
       $('lg-pass').value = '';
       if (r.pwGeaendert === false) { zeigePasswort(true); return; }
       await start();
@@ -1005,6 +1082,7 @@ async function stornoKlick(i, btn) {
  
 async function start() {
   $('fm-name').textContent = S.name;
+  $('fm-admin').hidden = S.rolle !== 'admin';
   fuelleMonatJahr();
   $('fm-datum').value = heute();
   zeigeScreen('scr-form');
@@ -1028,6 +1106,146 @@ async function start() {
   }
 }
  
+/* ---------- Admin ---------- */
+ 
+async function adminOeffnen() {
+  $('adm-meldung').classList.remove('zeigen');
+  $('adm-liste').innerHTML = '<div class="leer">Wird geladen …</div>';
+  zeigeScreen('scr-admin');
+  await adminLaden();
+}
+ 
+async function adminLaden() {
+  try {
+    const r = await post({ session: S.session, action: 'admin_liste' });
+    if (!r.ok) {
+      if (r.error === 'session') return sessionWeg();
+      $('adm-liste').innerHTML = '<div class="leer">' + r.error + '</div>';
+      return;
+    }
+    adminZeichnen(r.benutzer || []);
+  } catch (e) {
+    $('adm-liste').innerHTML = '<div class="leer">Keine Verbindung.</div>';
+  }
+}
+ 
+function adminZeichnen(liste) {
+  const el = $('adm-liste');
+  if (!liste.length) { el.innerHTML = '<div class="leer">Keine Benutzer.</div>'; return; }
+ 
+  el.innerHTML = liste.map(b => {
+    const marken =
+      (!b.aktiv           ? '<span class="marke aus">inaktiv</span>' : '') +
+      (b.rolle === 'admin' ? '<span class="marke adm">Admin</span>'  : '') +
+      (b.pwGeaendert === false ? '<span class="marke neu">noch nicht angemeldet</span>' : '') +
+      (b.gesperrt         ? '<span class="marke aus">gesperrt</span>' : '');
+ 
+    const selbst = b.email.toLowerCase() === String(localStorage.getItem('email') || '').toLowerCase();
+ 
+    return `
+      <div class="nutzer">
+        <div class="zeile1">
+          <span class="nm">${b.name}</span>
+          <span>${marken}</span>
+        </div>
+        <div class="ml">${b.email}${b.letzterLogin ? ' · zuletzt ' + b.letzterLogin : ''}</div>
+        <div class="tasten">
+          <button class="klein" data-tun="aktiv" data-email="${b.email}" ${selbst ? 'disabled' : ''}>
+            ${b.aktiv ? 'Deaktivieren' : 'Aktivieren'}</button>
+          <button class="klein" data-tun="reset" data-email="${b.email}">Passwort neu senden</button>
+          <button class="klein" data-tun="rolle" data-email="${b.email}" ${selbst ? 'disabled' : ''}>
+            ${b.rolle === 'admin' ? 'Admin entziehen' : 'Zum Admin machen'}</button>
+        </div>
+      </div>`;
+  }).join('');
+ 
+  el.querySelectorAll('.klein[data-tun]').forEach(btn => {
+    btn.addEventListener('click', () => adminAktion(btn));
+  });
+}
+ 
+function pwAnzeigen(r) {
+  if (!r.pw) return;
+  $('pw-wem').textContent  = r.name + ' · ' + r.email;
+  $('pw-wert').textContent = r.pw;
+  $('dlg-pw').classList.add('zeigen');
+}
+ 
+const FRAGEN = {
+  aktiv: 'Status dieses Benutzers ändern?',
+  reset: 'Neues Passwort erzeugen und per Mail senden? Das bisherige wird ungültig.',
+  rolle: 'Adminrechte dieses Benutzers ändern?'
+};
+ 
+async function adminAktion(btn) {
+  const tun   = btn.dataset.tun;
+  const email = btn.dataset.email;
+  if (!confirm(FRAGEN[tun])) return;
+ 
+  const alt = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '…';
+ 
+  try {
+    const r = await post({ session: S.session, action: 'admin_' + tun, email });
+    if (r.ok) {
+      toast(tun === 'reset' ? 'Zugangsmail verschickt.' : 'Geändert.', 'ok');
+      pwAnzeigen(r);
+      await adminLaden();
+    } else if (r.error === 'session') {
+      sessionWeg();
+    } else {
+      toast(r.error, 'err');
+      btn.disabled = false; btn.textContent = alt;
+    }
+  } catch (e) {
+    toast('Keine Verbindung.', 'err');
+    btn.disabled = false; btn.textContent = alt;
+  }
+}
+ 
+async function adminNeu() {
+  const name  = $('adm-name').value.trim();
+  const email = $('adm-email').value.trim();
+  const m     = $('adm-meldung');
+  m.classList.remove('zeigen');
+ 
+  if (!name || !email) {
+    m.textContent = 'Bitte Name und E-Mail eingeben.';
+    m.classList.add('zeigen');
+    return;
+  }
+ 
+  const btn = $('adm-neu');
+  btn.disabled = true;
+  btn.textContent = 'Wird angelegt …';
+ 
+  try {
+    const r = await post({ session: S.session, action: 'admin_neu', name, email });
+    if (r.ok) {
+      $('adm-name').value = ''; $('adm-email').value = '';
+      toast('Benutzer angelegt, Zugangsmail verschickt.', 'ok');
+      pwAnzeigen(r);
+      await adminLaden();
+    } else if (r.error === 'session') {
+      sessionWeg();
+    } else {
+      m.textContent = {
+        'ungültige Mailadresse': 'Die E-Mail-Adresse ist nicht gültig.',
+        'existiert bereits':     'Für diese Adresse besteht bereits ein Zugang.',
+        'Name fehlt':            'Bitte den Namen eingeben.'
+      }[r.error] || r.error;
+      m.classList.add('zeigen');
+    }
+  } catch (e) {
+    m.textContent = 'Keine Verbindung.';
+    m.classList.add('zeigen');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Benutzer anlegen und Zugang senden';
+  }
+}
+ 
 /* ---------- vezivanje ---------- */
  
 $('lg-senden').addEventListener('click', anmelden);
@@ -1046,6 +1264,18 @@ $('fm-foto-weg').addEventListener('click', fotoWeg);
 $('fm-liste').addEventListener('click', ladeListe);
 $('fm-abmelden').addEventListener('click', abmelden);
 $('fm-passwort').addEventListener('click', () => zeigePasswort(false));
+$('fm-admin').addEventListener('click', adminOeffnen);
+$('adm-zurueck').addEventListener('click', () => zeigeScreen('scr-form'));
+$('adm-neu').addEventListener('click', adminNeu);
+$('pw-fertig').addEventListener('click', () => $('dlg-pw').classList.remove('zeigen'));
+$('pw-kopieren').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('pw-wert').textContent);
+    toast('Passwort kopiert.', 'ok');
+  } catch (e) {
+    toast('Kopieren nicht möglich — bitte von Hand markieren.', 'err');
+  }
+});
 $('pw-senden').addEventListener('click', passwortSpeichern);
 $('pw-zurueck').addEventListener('click', () => zeigeScreen('scr-form'));
 $('pw-neu2').addEventListener('keydown', e => {
