@@ -55,7 +55,7 @@ Nova tabela, pet listova. Prvi red je zaglavlje, imena kolona doslovno.
 | `Parameter` | `Schluessel` `Wert` `GueltigAb` |
 | `Konten` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Kostenstellen` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
-| `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` `OrdnerId` `PwGeaendert` |
+| `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` `OrdnerId` `PwGeaendert` `Rolle` |
 | `Sessions` | `Token` `Email` `GueltigBis` |
 
 Popuni `Konten` i `Kostenstellen`. `Aktiv` upisuj kao `true`.
@@ -221,6 +221,32 @@ Kolone `Art`, `KM` i `KmSatz` stoje na kraju lista i služe za kontrolu.
 Power Query ih ne povlači, jer korak *Andere Spalten entfernen* nabraja
 kolone poimence — ne diraj postojeći upit.
 
+## Admin-Bereich
+
+Korisnicima upravlja neko iz firme kroz samu aplikaciju, ne kroz tabelu.
+
+**Ko je admin:** u koloni `Rolle` u listu `Benutzer` stoji `admin`.
+Prvom adminu tu vrednost upisuješ ručno; on dalje može postavljati druge.
+
+Admin u formularu vidi dugme **Benutzer verwalten**. Tamo može:
+
+- dodati korisnika — jedan red, jedan mejl sa pristupom, sve automatski
+- deaktivirati i ponovo aktivirati; deaktivacija odmah prekida sve sesije
+- poslati novu lozinku — stara prestaje da važi
+- dodeliti ili oduzeti admin prava
+
+Uz svakog korisnika stoje oznake: *inaktiv*, *Admin*, *gesperrt*,
+i *noch nicht angemeldet* dok nije postavio svoju lozinku.
+
+**Sopstveni nalog ne može da se deaktivira ni da sebi oduzme prava.**
+Bez toga bi jedan pogrešan klik ostavio firmu bez ijednog admina.
+
+**Provera prava je na serveru, ne u aplikaciji.** Svaka `admin_*` akcija
+prolazi kroz istu proveru role iz sesije. To što dugme kod običnog
+korisnika nije vidljivo nije zaštita — klijent može poslati bilo šta.
+
+`zugangVerschicken()` u editoru ostaje samo za prvi nalog.
+
 ## Faza 6 — Saradnici
 
 1. Upiši sve u `Benutzer`, po jedan red, samo `Email` i `Name`
@@ -259,6 +285,11 @@ pa pokreni `zugangVerschicken` ponovo.
 | 19 | Prva prijava sa lozinkom iz mejla | traži postavljanje svoje lozinke, nema preskakanja |
 | 20 | Posle promene lozinke | drugi uređaj traži ponovnu prijavu |
 | 21 | Promena lozinke sa pogrešnom starom | odbijeno |
+| 22 | Običan korisnik | dugme Benutzer verwalten nije vidljivo |
+| 23 | Običan korisnik pošalje `admin_liste` ručno | odbijeno sa `keine Berechtigung` |
+| 24 | Admin doda korisnika | red u tabeli, mejl stiže |
+| 25 | Admin deaktivira korisnika koji je prijavljen | njegov sledeći zahtev traži prijavu |
+| 26 | Admin pokuša da deaktivira sebe | odbijeno |
 
 Test 1 zaključava nalog na 15 minuta — radi ga sa testnim nalogom.
 
