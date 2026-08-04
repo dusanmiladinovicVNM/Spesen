@@ -72,7 +72,7 @@ body{
 
 /* ---------- polja ---------- */
 label{display:block;font-size:13px;margin:12px 0 4px}
-input,select,textarea{
+input:not([type=checkbox]),select,textarea{
   width:100%;height:48px;padding:0 12px;
   background:var(--feld);color:var(--text);
   border:1px solid var(--rand);border-radius:4px;
@@ -80,7 +80,7 @@ input,select,textarea{
   appearance:none;-webkit-appearance:none;
 }
 textarea{height:88px;padding:12px;resize:none;line-height:1.4}
-input:focus,select:focus,textarea:focus{outline:none;border-color:var(--akzent)}
+input:not([type=checkbox]):focus,select:focus,textarea:focus{outline:none;border-color:var(--akzent)}
 input::placeholder,textarea::placeholder{color:var(--grau)}
 select{
   padding-right:40px;
@@ -202,7 +202,12 @@ button.gross{
   display:flex;align-items:center;gap:10px;
   margin-top:14px;font-size:13px;cursor:pointer;
 }
-.haken input{width:20px;height:20px;flex:none;accent-color:var(--akzent);margin:0}
+.haken input{
+  width:20px;height:20px;flex:none;margin:0;padding:0;
+  appearance:auto;-webkit-appearance:checkbox;
+  accent-color:var(--akzent);
+  background:transparent;border:0;border-radius:0;
+}
 .nachricht{
   width:100%;height:210px;padding:12px;margin:12px 0 0;
   background:#1a1a1a;color:var(--text);
@@ -446,7 +451,7 @@ button.gross{
            autocapitalize="off" placeholder="name@firma.ch">
 
     <label class="haken" for="adm-mail">
-      <input type="checkbox" id="adm-mail" checked>
+      <input type="checkbox" id="adm-mail">
       <span>Zugangsmail verschicken</span>
     </label>
 
