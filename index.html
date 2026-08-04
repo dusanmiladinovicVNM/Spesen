@@ -1224,16 +1224,18 @@ function pwAnzeigen(r) {
   $('dlg-pw').classList.add('zeigen');
 }
 
-const FRAGEN = {
-  aktiv: 'Status dieses Benutzers ändern?',
-  reset: 'Neues Passwort erzeugen und per Mail senden? Das bisherige wird ungültig.',
-  rolle: 'Adminrechte dieses Benutzers ändern?'
-};
+function frage(tun) {
+  if (tun === 'aktiv') return 'Status dieses Benutzers ändern?';
+  if (tun === 'rolle') return 'Adminrechte dieses Benutzers ändern?';
+  return 'Neues Passwort erzeugen? Das bisherige wird ungültig'
+       + ($('adm-mail').checked ? ' und ein Zugangsmail wird verschickt.' : '.')
+       + '\n\nDie Nachricht wird anschliessend zum Kopieren angezeigt.';
+}
 
 async function adminAktion(btn) {
   const tun   = btn.dataset.tun;
   const email = btn.dataset.email;
-  if (!confirm(FRAGEN[tun])) return;
+  if (!confirm(frage(tun))) return;
 
   const alt = btn.textContent;
   btn.disabled = true;
