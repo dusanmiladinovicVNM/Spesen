@@ -1,0 +1,1021 @@
+/**
+ * Spesenerfassung — Backend
+ * Google Apps Script, gebunden an die Tabelle.
+ *
+ * Bereitstellen als Web-App:
+ *   Ausführen als: Ich
+ *   Zugriff:       Jeder
+ *
+ * Nach JEDER Codeänderung:
+ *   Bereitstellungen verwalten → Bearbeiten → Neue Version
+ */
+
+// ============================================================
+//  Konfiguration
+// ============================================================
+
+const SHEET_ID   = '1rDi4UQDGc_H1fADmFETAEi1Ef5WN9vboF5Av1W1Phmk';                 // Teil der URL zwischen /d/ und /edit
+const TOKEN_READ = 'HIER_LANGER_ZUFALLSSTRING';        // nur für den CSV-Endpunkt (Excel)
+const PWA_URL    = 'https://dusanmiladinovicvnm.github.io/Spesen/';        // Link im Zugangsmail
+
+const BILD_ORDNER      = '1F7Y7DKMu9s5JEL67w5Ywy7p88vpMRTCM';      // Wurzelordner für Belegfotos
+const BILD_MONATSORDNER = true;   // Unterordner je Periode, z.B. 2026-07
+const BILD_OEFFENTLICH  = false;  // true = Link ohne Google-Anmeldung sichtbar
+
+/* Spalten des CSV-Exports für Excel — Reihenfolge ist verbindlich.
+   Die ersten sechs entsprechen dem Bereich Datum:Bemerkung in der Vorlage.
+   Neue Spalten im Blatt "Belege" ändern hier nichts: was Excel bekommt,
+   steht ausschliesslich in dieser Liste. */
+const EXPORT_SPALTEN = [
+  'Datum', 'Brutto', 'MwstSatz', 'KontoNr', 'KstNr', 'Bemerkung',
+  'Mitarbeiter', 'Monat', 'Jahr', 'Art', 'KM', 'BildUrl'
+];
+
+/* Ob ein Zugangsmail verschickt wird, entscheidet der Admin je Benutzer
+   im Admin-Bereich. Die fertige Nachricht wird ihm dort ohnehin immer
+   angezeigt — für WhatsApp, SMS oder ein anderes Postfach.
+   Dieser Wert gilt nur als Vorgabe für zugangVerschicken() im Editor. */
+const MAIL_STANDARD = true;
+
+/* true  = Passwort steht im Zugangsmail
+   false = Mail enthält nur den Link, das Passwort geht über einen
+           anderen Kanal. Sicherer, weil nichts im Postfach liegen bleibt. */
+const PASSWORT_PER_MAIL = true;
+
+// Absenderangaben im Zugangsmail
+const ABSENDER     = 'Dusan Miladinovic';
+const ANTWORT_MAIL = 'dmi@yepp.ch';
+const KONTAKT_TEL  = '+41 44 542 42 12';
+
+const SESSION_TAGE = 60;
+const SPERRE_MIN   = 15;
+const MAX_FEHLER   = 5;
+
+// Spaltenreihenfolge in "Belege" — muss mit der Tabelle übereinstimmen
+// A Zeitstempel | B Mitarbeiter | C Email | D BelegNr | E Datum | F Monat |
+// G Jahr | H Brutto | I MwstSatz | J MwstBetrag | K Netto | L KontoNr |
+// M KontoBez | N KstNr | O KstBez | P Bemerkung | Q DedupKey | R Storniert |
+// S Art | T KM | U KmSatz | V BildUrl
+
+
+// ============================================================
+//  Hilfsfunktionen
+// ============================================================
+
+function out(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function sheet(name) {
+  return SpreadsheetApp.openById(SHEET_ID).getSheetByName(name);
+}
+
+function round2(x) {
+  return Math.round((Number(x) + Number.EPSILON) * 100) / 100;
+}
+
+function dedupKey(email, datum, brutto, belegNr, suffix) {
+  const base = [
+    String(email).trim().toLowerCase(),
+    String(datum),
+    Math.round(Number(brutto) * 100),
+    String(belegNr || '').toLowerCase().replace(/\s+/g, '')
+  ].join('|');
+  return Number(suffix) > 0 ? base + '|' + Number(suffix) : base;
+}
+
+function hashPass(pw, salt) {
+  let h = salt + '|' + pw;
+  for (let i = 0; i < 5000; i++) {
+    h = Utilities.base64Encode(
+      Utilities.computeDigest(
+        Utilities.DigestAlgorithm.SHA_256, h, Utilities.Charset.UTF_8));
+  }
+  return h;
+}
+
+/** Zaglavlja iz tabele stižu ponekad sa razmakom na kraju.
+ *  Bez trimovanja indexOf vrati -1 i poređenja tiho promaše. */
+function kopf(rows) {
+  return rows[0].map(h => String(h).trim());
+}
+
+/** Normalisiert die Datumsspalte auf yyyy-mm-dd.
+ *  Ist die Zelle als Text formatiert, kommt der Wert bereits so an.
+ *  Ist sie ein echtes Datum, liefert Sheets ein Date-Objekt in UTC —
+ *  ohne Umrechnung nach Europe/Zurich verschiebt sich der Tag. */
+function alsDatum(v) {
+  if (v instanceof Date) {
+    return Utilities.formatDate(v, 'Europe/Zurich', 'yyyy-MM-dd');
+  }
+  return String(v || '').slice(0, 10);
+}
+
+function zufallPasswort() {
+  const c = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 12; i++) {
+    s += c.charAt(Math.floor(Math.random() * c.length));
+  }
+  return s;
+}
+
+
+/** Wert aus dem Blatt "Parameter". Bei mehreren Zeilen mit demselben
+ *  Schlüssel gewinnt die jüngste, deren GueltigAb <= datum ist.
+ *  GueltigAb muss als Text yyyy-mm-dd gespeichert sein. */
+function parameter(schluessel, datum) {
+  const rows = sheet('Parameter').getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const iS = head.indexOf('Schluessel');
+  const iW = head.indexOf('Wert');
+  const iA = head.indexOf('GueltigAb');
+  if (iS < 0 || iW < 0) return null;
+
+  let wert = null, bestAb = '';
+  rows.forEach(r => {
+    if (String(r[iS]).trim() !== schluessel) return;
+    const ab = iA >= 0 ? String(r[iA] || '').trim() : '';
+    if (ab && datum && ab > String(datum)) return;
+    if (wert === null || ab >= bestAb) { wert = r[iW]; bestAb = ab; }
+  });
+  return wert;
+}
+
+/** Alle KmSätze für die Vorschau im Client. */
+function kmSaetze() {
+  const rows = sheet('Parameter').getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const iS = head.indexOf('Schluessel');
+  const iW = head.indexOf('Wert');
+  const iA = head.indexOf('GueltigAb');
+  return rows
+    .filter(r => String(r[iS]).trim() === 'KmSatz')
+    .map(r => ({ ab: iA >= 0 ? String(r[iA] || '').trim() : '',
+                 satz: Number(r[iW]) }))
+    .sort((a, b) => a.ab < b.ab ? -1 : 1);
+}
+
+
+/** Unterordner holen oder anlegen. */
+function unterOrdner(eltern, name) {
+  const it = eltern.getFoldersByName(name);
+  return it.hasNext() ? it.next() : eltern.createFolder(name);
+}
+
+/** Persönlicher Ordner des Mitarbeitenden.
+ *  Die Verknüpfung läuft über die Ordner-ID in der Spalte OrdnerId,
+ *  nicht über den Namen — zwei Personen dürfen gleich heissen.
+ *  Der Ordnername ist reine Kosmetik und darf in Drive umbenannt werden. */
+function benutzerOrdner(u) {
+  const sh   = sheet('Benutzer');
+  const head = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+  const iOrd = head.indexOf('OrdnerId');
+  if (iOrd < 0) throw new Error('Spalte OrdnerId fehlt im Blatt Benutzer');
+
+  const z  = benutzerZeile(u.email);
+  const id = String(z.d[iOrd] || '').trim();
+
+  if (id) {
+    try { return DriveApp.getFolderById(id); }
+    catch (e) { /* Ordner gelöscht — unten neu anlegen */ }
+  }
+
+  const ordner = DriveApp.getFolderById(BILD_ORDNER).createFolder(u.name || u.email);
+  sh.getRange(z.zeile, iOrd + 1).setValue(ordner.getId());
+  return ordner;
+}
+
+/** Zielordner inklusive Monatsunterordner. */
+function zielOrdner(u, datum) {
+  const persoenlich = benutzerOrdner(u);
+  if (!BILD_MONATSORDNER) return persoenlich;
+  return unterOrdner(persoenlich, String(datum).slice(0, 7));   // 2026-07
+}
+
+/** Speichert ein Foto und gibt die Ansichts-URL zurück.
+ *  Erwartet einen data:-URL wie ihn canvas.toDataURL() liefert.
+ *  Der Client verkleinert das Bild vorher — hier kommen ~200 KB an. */
+function bildSpeichern(dataUrl, u, datum, betrag, belegNr) {
+  if (!dataUrl || String(dataUrl).indexOf('base64,') < 0) return '';
+  if (!BILD_ORDNER || BILD_ORDNER.indexOf('HIER_') === 0) {
+    throw new Error('BILD_ORDNER ist nicht gesetzt');
+  }
+
+  const nr   = String(belegNr || '').replace(/[^A-Za-z0-9]+/g, '');
+  const name = [String(datum), Number(betrag).toFixed(2), nr]
+                 .filter(Boolean).join('_') + '.jpg';
+
+  const roh   = String(dataUrl).split('base64,')[1];
+  const blob  = Utilities.newBlob(Utilities.base64Decode(roh), 'image/jpeg', name);
+  const datei = zielOrdner(u, datum).createFile(blob);
+
+  if (BILD_OEFFENTLICH) {
+    datei.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  }
+  return datei.getUrl();
+}
+
+
+// ============================================================
+//  Benutzer und Sitzungen
+// ============================================================
+
+function benutzerZeile(email) {
+  const rows = sheet('Benutzer').getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).trim().toLowerCase() ===
+        String(email).trim().toLowerCase()) {
+      return { zeile: i + 1, d: rows[i] };
+    }
+  }
+  return null;
+}
+
+function login(b) {
+  const u = benutzerZeile(b.email);
+  if (!u) return out({ ok: false, error: 'login' });
+
+  const sh = sheet('Benutzer');
+  const email       = u.d[0];
+  const name        = u.d[1];
+  const hash        = u.d[2];
+  const salt        = u.d[3];
+  const aktiv       = u.d[4];
+  const fehler      = u.d[5];
+  const gesperrtBis = u.d[6];
+
+  if (String(aktiv).toLowerCase() !== 'true') {
+    return out({ ok: false, error: 'inaktiv' });
+  }
+  if (gesperrtBis && new Date(gesperrtBis) > new Date()) {
+    return out({ ok: false, error: 'gesperrt' });
+  }
+  if (!hash) {
+    return out({ ok: false, error: 'login' });
+  }
+
+  if (hashPass(b.passwort, salt) !== hash) {
+    const n = Number(fehler || 0) + 1;
+    if (n >= MAX_FEHLER) {
+      sh.getRange(u.zeile, 6).setValue(0);
+      sh.getRange(u.zeile, 7).setValue(new Date(Date.now() + SPERRE_MIN * 60000));
+    } else {
+      sh.getRange(u.zeile, 6).setValue(n);
+    }
+    return out({ ok: false, error: 'login' });
+  }
+
+  sh.getRange(u.zeile, 6).setValue(0);
+  sh.getRange(u.zeile, 7).setValue('');
+  sh.getRange(u.zeile, 8).setValue(new Date());
+
+  const token = Utilities.getUuid();
+  sheet('Sessions').appendRow([
+    token, email, new Date(Date.now() + SESSION_TAGE * 86400000)
+  ]);
+
+  const kopfz  = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+  const iGeaen = kopfz.indexOf('PwGeaendert');
+  const geaendert = iGeaen < 0
+    ? true                                   // Spalte fehlt → nicht erzwingen
+    : String(u.d[iGeaen]).toLowerCase() === 'true';
+
+  const iRolle = kopfz.indexOf('Rolle');
+  const rolle  = iRolle >= 0 ? String(u.d[iRolle]).trim().toLowerCase() : '';
+
+  return out({ ok: true, session: token, name: name, email: email,
+               pwGeaendert: geaendert, rolle: rolle });
+}
+
+/** Gibt {email, name} zurück oder null. Identität kommt IMMER von hier,
+ *  nie aus dem Request — sonst könnte jeder unter fremdem Namen erfassen. */
+function session(token) {
+  if (!token) return null;
+  const rows = sheet('Sessions').getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][0] === token && new Date(rows[i][2]) > new Date()) {
+      const u = benutzerZeile(rows[i][1]);
+      if (!u || String(u.d[4]).toLowerCase() !== 'true') return null;
+
+      const sh   = sheet('Benutzer');
+      const head = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+      const iR   = head.indexOf('Rolle');
+
+      return {
+        email: u.d[0],
+        name:  u.d[1],
+        rolle: iR >= 0 ? String(u.d[iR]).trim().toLowerCase() : ''
+      };
+    }
+  }
+  return null;
+}
+
+function passwortAendern(b, u) {
+  const z = benutzerZeile(u.email);
+  if (hashPass(b.alt, z.d[3]) !== z.d[2]) {
+    return out({ ok: false, error: 'login' });
+  }
+  if (!b.neu || String(b.neu).length < 8) {
+    return out({ ok: false, error: 'zu kurz' });
+  }
+  const salt = Utilities.getUuid();
+  const sh = sheet('Benutzer');
+  sh.getRange(z.zeile, 3).setValue(hashPass(b.neu, salt));
+  sh.getRange(z.zeile, 4).setValue(salt);
+
+  const kopfz  = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+  const iGeaen = kopfz.indexOf('PwGeaendert');
+  if (iGeaen >= 0) sh.getRange(z.zeile, iGeaen + 1).setValue(true);
+
+  // geändertes Passwort meldet alle Geräte ab
+  sitzungenBeenden(u.email);
+
+  return out({ ok: true });
+}
+
+
+// ============================================================
+//  Lesen
+// ============================================================
+
+function doGet(e) {
+  const p = e.parameter;
+
+  // CSV für Power Query — Excel kann sich nicht anmelden
+  if (p.format === 'csv') {
+    if (p.token !== TOKEN_READ) return out({ ok: false, error: 'auth' });
+
+    const rows = sheet('Belege').getDataRange().getValues();
+    const head = kopf(rows);
+    rows.shift();
+
+    const iSto = head.indexOf('Storniert');
+    const iDat = head.indexOf('Datum');
+    const spalten = EXPORT_SPALTEN.map(n => ({ name: n, i: head.indexOf(n) }));
+
+    const fehlend = spalten.filter(x => x.i < 0).map(x => x.name);
+    if (fehlend.length) {
+      return out({ ok: false, error: 'Spalte fehlt: ' + fehlend.join(', ') });
+    }
+
+    const zellen = v => '"' + String(v).replace(/"/g, '""') + '"';
+
+    const csv = [EXPORT_SPALTEN.map(zellen).join(',')].concat(
+      rows
+        .filter(r => String(r[iSto]).toLowerCase() !== 'true')
+        .map(r => spalten
+          .map(x => zellen(x.i === iDat ? alsDatum(r[x.i]) : r[x.i]))
+          .join(','))
+    ).join('\n');
+
+    return ContentService.createTextOutput(csv)
+      .setMimeType(ContentService.MimeType.CSV);
+  }
+
+  const u = session(p.session);
+  if (!u) return out({ ok: false, error: 'session' });
+
+  if (p.action === 'stammdaten') {
+    return out({
+      ok: true,
+      konten:        aktiveListe('Konten'),
+      kostenstellen: aktiveListe('Kostenstellen'),
+      kmSaetze:      kmSaetze()
+    });
+  }
+
+  // Bild einer eigenen Zeile — geht bewusst über den Server,
+  // damit Mitarbeitende keinen Drive-Zugriff brauchen.
+  if (p.action === 'bild') {
+    const sh     = sheet('Belege');
+    const zeile  = Number(p.zeile);
+    const breite = sh.getLastColumn();
+    if (!zeile || zeile < 2) return out({ ok: false, error: 'zeile fehlt' });
+
+    const head = kopf(sh.getRange(1, 1, 1, breite).getValues());
+    const iEml = head.indexOf('Email');
+    const iBld = head.indexOf('BildUrl');
+    if (iEml < 0 || iBld < 0) return out({ ok: false, error: 'Spalte fehlt' });
+
+    const row = sh.getRange(zeile, 1, 1, breite).getValues()[0];
+    if (String(row[iEml]).trim().toLowerCase() !== String(u.email).trim().toLowerCase()) {
+      return out({ ok: false, error: 'fremder Beleg' });
+    }
+
+    const treffer = String(row[iBld] || '').match(/[-\w]{25,}/);
+    if (!treffer) return out({ ok: false, error: 'kein Bild' });
+
+    try {
+      const blob = DriveApp.getFileById(treffer[0]).getBlob();
+      return out({ ok: true,
+        bild: 'data:image/jpeg;base64,' + Utilities.base64Encode(blob.getBytes()) });
+    } catch (err) {
+      return out({ ok: false, error: 'Datei nicht lesbar' });
+    }
+  }
+
+  if (p.action === 'meine') {
+    const rows = sheet('Belege').getDataRange().getValues();
+    const head = kopf(rows);
+    rows.shift();
+    const ix = n => head.indexOf(n);
+
+    // _zeile = stvarni broj reda u tabeli; storno ide po njemu,
+    // pa ne zavisi od toga kako je kolona DedupKey nazvana
+    const iDat = head.indexOf('Datum');
+    const alle = rows.map((r, i) => {
+      const o = { _zeile: i + 2 };
+      head.forEach((h, k) => o[h] = (k === iDat ? alsDatum(r[k]) : r[k]));
+      return o;
+    });
+
+    const liste = alle.filter(o =>
+      String(o[head[ix('Email')]]).trim().toLowerCase() === u.email.trim().toLowerCase() &&
+      String(o[head[ix('Monat')]]) === String(p.monat) &&
+      String(o[head[ix('Jahr')]])  === String(p.jahr)  &&
+      String(o[head[ix('Storniert')]]).toLowerCase() !== 'true'
+    );
+
+    return out({ ok: true, belege: liste });
+  }
+
+  return out({ ok: false, error: 'unbekannte Aktion' });
+}
+
+function aktiveListe(name) {
+  const rows = sheet(name).getDataRange().getValues();
+  rows.shift();
+  return rows
+    .filter(r => String(r[0]).trim() !== '' &&
+                 String(r[2]).toLowerCase() === 'true')
+    .sort((a, b) => (Number(a[3]) || 0) - (Number(b[3]) || 0))
+    .map(r => ({ nr: String(r[0]).trim(), bez: String(r[1]).trim() }));
+}
+
+
+// ============================================================
+//  Schreiben
+// ============================================================
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const b = JSON.parse(e.postData.contents);
+
+    if (b.action === 'login') return login(b);
+
+    const u = session(b.session);
+    if (!u) return out({ ok: false, error: 'session' });
+
+    // Alle admin_* Aktionen laufen durch dieselbe Rollenprüfung
+    if (String(b.action || '').indexOf('admin_') === 0) {
+      if (u.rolle !== 'admin') return out({ ok: false, error: 'keine Berechtigung' });
+      if (b.action === 'admin_liste') return adminListe();
+      if (b.action === 'admin_neu')   return adminNeu(b, u);
+      if (b.action === 'admin_aktiv') return adminAktiv(b, u);
+      if (b.action === 'admin_reset') return adminReset(b, u);
+      if (b.action === 'admin_rolle') return adminRolle(b, u);
+      return out({ ok: false, error: 'unbekannte Aktion' });
+    }
+
+    if (b.action === 'passwort') return passwortAendern(b, u);
+    if (b.action === 'storno')   return storno(b, u);
+    if (b.art    === 'fahrt')    return fahrt(b, u);
+    return beleg(b, u);
+
+  } catch (err) {
+    return out({ ok: false, error: String(err) });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function beleg(b, u) {
+  const brutto = Number(b.brutto);
+  if (!brutto || brutto <= 0) return out({ ok: false, error: 'betrag' });
+  if (!b.kontoNr || !b.kstNr)  return out({ ok: false, error: 'konto' });
+  if (!b.datum)                return out({ ok: false, error: 'datum' });
+
+  const satz  = Number(b.mwstSatz);                       // 8.1
+  const mwst  = round2(brutto - brutto / (1 + satz / 100));
+  const netto = round2(brutto - mwst);
+
+  const key = dedupKey(u.email, b.datum, brutto, b.belegNr, b.suffix);
+
+  const sh   = sheet('Belege');
+  const rows = sh.getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const iKey = head.indexOf('DedupKey');
+  const iSto = head.indexOf('Storniert');
+
+  const dup = rows.some(r =>
+    String(r[iKey]).trim() === key && String(r[iSto]).toLowerCase() !== 'true');
+  if (dup) return out({ ok: false, error: 'duplikat' });
+
+  let bildUrl = '';
+  if (b.bild) {
+    try {
+      bildUrl = bildSpeichern(b.bild, u, b.datum, brutto, b.belegNr);
+    } catch (err) {
+      return out({ ok: false, error: 'bild: ' + err.message });
+    }
+  }
+
+  sh.appendRow([
+    new Date(),                 // Zeitstempel
+    u.name,                     // Mitarbeiter  ← aus der Sitzung
+    u.email,                    // Email        ← aus der Sitzung
+    b.belegNr || '',
+    String(b.datum),            // yyyy-mm-dd als Text, keine Zeitzone
+    Number(b.monat),
+    Number(b.jahr),
+    brutto,
+    satz / 100,                 // 0.081 — Excel-Prozentformat erwartet das so
+    mwst,
+    netto,
+    String(b.kontoNr),
+    String(b.kontoBez || ''),
+    String(b.kstNr),
+    String(b.kstBez || ''),
+    String(b.bemerkung || ''),
+    key,
+    false,
+    'Beleg',
+    '',
+    '',
+    bildUrl
+  ]);
+
+  return out({ ok: true, mwst: mwst, netto: netto, bild: !!bildUrl });
+}
+
+/** Kilometerentschädigung: ein Eintrag pro Person und Tag.
+ *  Bei erneuter Erfassung für denselben Tag wird die Zeile ersetzt,
+ *  nicht ein zweiter Eintrag angelegt. */
+function fahrt(b, u) {
+  const km = Number(b.km);
+  if (!km || km <= 0) return out({ ok: false, error: 'km' });
+  if (!b.datum)       return out({ ok: false, error: 'datum' });
+  if (!b.kstNr)       return out({ ok: false, error: 'konto' });
+
+  const satz = Number(parameter('KmSatz', b.datum));
+  if (!satz) return out({ ok: false, error: 'kmsatz' });
+
+  const kontoNr = String(parameter('KmKonto', b.datum) || '').trim();
+  if (!kontoNr) return out({ ok: false, error: 'kmkonto' });
+
+  const kontoTreffer = aktiveListe('Konten').filter(k => k.nr === kontoNr)[0];
+  const kontoBez = kontoTreffer ? kontoTreffer.bez : '';
+
+  const brutto = round2(km * satz);
+  const key = String(u.email).trim().toLowerCase() + '|' + String(b.datum) + '|fahrt';
+
+  const sh   = sheet('Belege');
+  const rows = sh.getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const iKey = head.indexOf('DedupKey');
+  const iSto = head.indexOf('Storniert');
+  const iKm  = head.indexOf('KM');
+
+  let treffer = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (String(rows[i][iKey]).trim() === key &&
+        String(rows[i][iSto]).toLowerCase() !== 'true') {
+      treffer = i + 2;
+      if (!b.ersetzen) {
+        return out({ ok: false, error: 'fahrt-existiert',
+                     km: iKm >= 0 ? rows[i][iKm] : null });
+      }
+    }
+  }
+
+  const text = km + ' km à ' + satz.toFixed(2) +
+               (b.bemerkung ? ' — ' + String(b.bemerkung) : '');
+
+  const zeile = [
+    new Date(), u.name, u.email, '',
+    String(b.datum), Number(b.monat), Number(b.jahr),
+    brutto, 0, 0, brutto,
+    kontoNr, kontoBez,
+    String(b.kstNr), String(b.kstBez || ''),
+    text, key, false,
+    'Fahrt', km, satz, ''
+  ];
+
+  if (treffer) {
+    sh.getRange(treffer, 1, 1, zeile.length).setValues([zeile]);
+  } else {
+    sh.appendRow(zeile);
+  }
+
+  return out({ ok: true, brutto: brutto, satz: satz, ersetzt: !!treffer });
+}
+
+
+function storno(b, u) {
+  const sh    = sheet('Belege');
+  const zeile = Number(b.zeile);
+
+  if (!zeile || zeile < 2) return out({ ok: false, error: 'zeile fehlt' });
+
+  const breite = sh.getLastColumn();
+  const head   = kopf(sh.getRange(1, 1, 1, breite).getValues());
+  const iSto   = head.indexOf('Storniert');
+  const iEml   = head.indexOf('Email');
+
+  if (iSto < 0 || iEml < 0) {
+    return out({ ok: false,
+      error: 'Spalte fehlt. Gefundene Kopfzeile: ' + head.join(' | ') });
+  }
+
+  const row = sh.getRange(zeile, 1, 1, breite).getValues()[0];
+
+  if (String(row[iEml]).trim().toLowerCase() !== String(u.email).trim().toLowerCase()) {
+    return out({ ok: false, error: 'fremder Beleg' });
+  }
+
+  sh.getRange(zeile, iSto + 1).setValue(true);
+  return out({ ok: true });
+}
+
+
+/** Im Editor ausführen und das Log prüfen, wenn Spalten nicht gefunden werden. */
+function kopfPruefen() {
+  ['Belege', 'Konten', 'Kostenstellen', 'Benutzer', 'Sessions', 'Parameter'].forEach(n => {
+    const sh = sheet(n);
+    if (!sh) { Logger.log(n + ' → BLATT FEHLT'); return; }
+    Logger.log(n + ' → ' + kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues())
+      .map(h => '[' + h + ']').join(' '));
+  });
+}
+
+
+// ============================================================
+//  Verwaltung — von Hand im Editor ausführen
+// ============================================================
+
+/** Verschickt das Zugangsmail. Text an einer Stelle, für Ersteinrichtung
+ *  und Passwort-Reset gleichermassen. */
+function mailSenden(email, name, pw) {
+  const vorname = String(name).trim().split(/\s+/)[0] || name;
+  const S = 'font-family:Verdana,Geneva,sans-serif;';
+  const mitPw = PASSWORT_PER_MAIL && pw;
+
+  const zeilePwHtml = mitPw
+    ? '<tr><td style="padding:2px 16px 2px 0">Passwort:</td>' +
+      '<td style="padding:2px 0"><b>' + pw + '</b></td></tr>'
+    : '';
+
+  const hinweis = mitPw
+    ? 'Beim ersten Anmelden werden Sie aufgefordert, ein eigenes Passwort zu ' +
+      'setzen. Danach ist das oben stehende nicht mehr gültig.'
+    : 'Das Passwort erhalten Sie separat. Beim ersten Anmelden werden Sie ' +
+      'aufgefordert, es durch ein eigenes zu ersetzen.';
+
+  MailApp.sendEmail({
+    to:      email,
+    name:    ABSENDER,
+    replyTo: ANTWORT_MAIL,
+    subject: 'Spesenerfassung — Ihr Zugang',
+
+    htmlBody:
+      '<div style="' + S + 'font-size:13px;line-height:1.55;color:#222">' +
+      '<p>Guten Tag ' + vorname + '</p>' +
+      '<p>Wie angekündigt erfassen wir die Spesen ab sofort online.</p>' +
+      '<p>Nachfolgend Ihre Zugangsdaten und eine kurze Anleitung.</p>' +
+      '<table cellpadding="0" cellspacing="0" style="' + S +
+        'font-size:13px;margin:16px 0">' +
+        '<tr><td style="padding:2px 16px 2px 0">Webseite:</td>' +
+            '<td style="padding:2px 0"><a href="' + PWA_URL + '">' + PWA_URL + '</a></td></tr>' +
+        '<tr><td style="padding:2px 16px 2px 0">Benutzername:</td>' +
+            '<td style="padding:2px 0">' + email + '</td></tr>' +
+        zeilePwHtml +
+      '</table>' +
+      '<p>' + hinweis + '</p>' +
+      '<p style="margin-top:24px"><b>Symbol auf dem Handy ablegen</b></p>' +
+      '<p style="margin-bottom:4px">iPhone:</p>' +
+      '<ol style="' + S + 'font-size:13px;margin:0 0 16px;padding-left:20px">' +
+        '<li>Webseite in Safari öffnen</li>' +
+        '<li>Unten auf «Teilen» tippen</li>' +
+        '<li>«Zum Home-Bildschirm» wählen</li>' +
+        '<li>Auf «Hinzufügen» tippen</li>' +
+      '</ol>' +
+      '<p style="margin-bottom:4px">Android:</p>' +
+      '<ol style="' + S + 'font-size:13px;margin:0 0 16px;padding-left:20px">' +
+        '<li>Webseite in Chrome öffnen</li>' +
+        '<li>Oben rechts auf die drei Punkte tippen</li>' +
+        '<li>«Zum Startbildschirm hinzufügen» wählen</li>' +
+      '</ol>' +
+      '<p>Danach genügt ein Tippen auf das Symbol. Eine erneute Anmeldung ' +
+      'ist nicht nötig.</p>' +
+      '<p style="margin-top:24px">Bei Fragen erreichen Sie mich unter ' +
+      KONTAKT_TEL + '.</p>' +
+      '<p>Freundliche Grüsse<br>' + ABSENDER + '<br>YEPP Logistics<br>' +
+      KONTAKT_TEL + '</p>' +
+      '</div>',
+
+    body:
+      'Guten Tag ' + vorname + '\n\n' +
+      'Wie angekündigt erfassen wir die Spesen ab sofort online.\n\n' +
+      'Nachfolgend Ihre Zugangsdaten und eine kurze Anleitung.\n\n' +
+      'Webseite:     ' + PWA_URL + '\n' +
+      'Benutzername: ' + email + '\n' +
+      (mitPw ? 'Passwort:     ' + pw + '\n' : '') + '\n' +
+      hinweis + '\n\n\n' +
+      'SYMBOL AUF DEM HANDY ABLEGEN\n\n' +
+      'iPhone:\n' +
+      '  1. Webseite in Safari öffnen\n' +
+      '  2. Unten auf "Teilen" tippen\n' +
+      '  3. "Zum Home-Bildschirm" wählen\n' +
+      '  4. Auf "Hinzufügen" tippen\n\n' +
+      'Android:\n' +
+      '  1. Webseite in Chrome öffnen\n' +
+      '  2. Oben rechts auf die drei Punkte tippen\n' +
+      '  3. "Zum Startbildschirm hinzufügen" wählen\n\n' +
+      'Danach genügt ein Tippen auf das Symbol. Eine erneute Anmeldung ist\n' +
+      'nicht nötig.\n\n\n' +
+      'Bei Fragen erreichen Sie mich unter ' + KONTAKT_TEL + '.\n\n' +
+      'Freundliche Grüsse\n' + ABSENDER + '\nYEPP Logistics\n' + KONTAKT_TEL
+  });
+}
+
+
+/** Neues Passwort setzen, Zähler zurücksetzen und Zugangsmail verschicken. */
+function zugangSenden(zeile, email, name, mailSchicken) {
+  const sh   = sheet('Benutzer');
+  const head = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+
+  const pw   = zufallPasswort();
+  const salt = Utilities.getUuid();
+
+  sh.getRange(zeile, 3).setValue(hashPass(pw, salt));
+  sh.getRange(zeile, 4).setValue(salt);
+  sh.getRange(zeile, 5).setValue(true);
+  sh.getRange(zeile, 6).setValue(0);
+  sh.getRange(zeile, 7).setValue('');
+
+  const iG = head.indexOf('PwGeaendert');
+  if (iG >= 0) sh.getRange(zeile, iG + 1).setValue(false);
+
+  if (mailSchicken) mailSenden(email, name, pw);
+  return pw;
+}
+
+
+/**
+ * Verschickt Zugänge für alle Zeilen in "Benutzer" ohne PassHash.
+ * Wird nur noch zum Anlegen des allerersten Kontos gebraucht —
+ * danach läuft die Verwaltung über den Admin-Bereich in der App.
+ */
+function zugangVerschicken() {
+  const sh   = sheet('Benutzer');
+  const rows = sh.getDataRange().getValues();
+  let anzahl = 0;
+
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][2]) continue;
+    const email = String(rows[i][0]).trim();
+    if (!email) continue;
+    const pw = zugangSenden(i + 1, email, String(rows[i][1]).trim(), MAIL_STANDARD);
+    Logger.log(email + '  →  ' + pw);
+    anzahl++;
+    Utilities.sleep(4000);
+  }
+  Logger.log(anzahl + ' Zugang/Zugänge verschickt.');
+}
+
+
+// ============================================================
+//  Admin-Bereich
+//  Jede Aktion prüft die Rolle serverseitig. Dass der Knopf in
+//  der App fehlt, ist keine Absicherung — der Client kann alles
+//  senden.
+// ============================================================
+
+function adminListe() {
+  const sh   = sheet('Benutzer');
+  const rows = sh.getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const ix = n => head.indexOf(n);
+
+  const jetzt = new Date();
+  return out({ ok: true, benutzer: rows
+    .filter(r => String(r[0]).trim())
+    .map((r, i) => ({
+      zeile:       i + 2,
+      email:       String(r[0]).trim(),
+      name:        String(r[1]).trim(),
+      aktiv:       String(r[4]).toLowerCase() === 'true',
+      angelegt:    !!r[2],
+      pwGeaendert: ix('PwGeaendert') < 0 ? null
+                     : String(r[ix('PwGeaendert')]).toLowerCase() === 'true',
+      gesperrt:    !!(r[6] && new Date(r[6]) > jetzt),
+      letzterLogin: r[7] ? Utilities.formatDate(new Date(r[7]), 'Europe/Zurich', 'dd.MM.yyyy') : '',
+      rolle:       ix('Rolle') < 0 ? '' : String(r[ix('Rolle')]).trim().toLowerCase()
+    }))
+  });
+}
+
+
+function adminNeu(b) {
+  const email = String(b.email || '').trim().toLowerCase();
+  const name  = String(b.name  || '').trim();
+
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return out({ ok: false, error: 'ungültige Mailadresse' });
+  }
+  if (!name) return out({ ok: false, error: 'Name fehlt' });
+  if (benutzerZeile(email)) return out({ ok: false, error: 'existiert bereits' });
+
+  const sh = sheet('Benutzer');
+  sh.appendRow([email, name, '', '', true, 0, '', '']);
+  const zeile = sh.getLastRow();
+
+  const mailSchicken = b.mail !== false;
+  let pw, mailOk = mailSchicken;
+
+  try {
+    pw = zugangSenden(zeile, email, name, mailSchicken);
+  } catch (err) {
+    // Benutzer ist angelegt, nur der Versand hat nicht geklappt —
+    // das Passwort steht trotzdem in der Tabelle und wird zurückgegeben.
+    mailOk = false;
+    pw = null;
+  }
+
+  if (pw === null) {
+    return out({ ok: false, error: 'angelegt, aber Versand fehlgeschlagen. ' +
+                 'Bitte "Passwort neu senden" ohne Mail verwenden.' });
+  }
+
+  return out({ ok: true, email: email, name: name, pw: pw, mail: mailOk });
+}
+
+
+function adminAktiv(b, u) {
+  const ziel = benutzerZeile(b.email);
+  if (!ziel) return out({ ok: false, error: 'unbekannt' });
+
+  if (String(b.email).trim().toLowerCase() === String(u.email).trim().toLowerCase()) {
+    return out({ ok: false, error: 'eigenes Konto nicht möglich' });
+  }
+
+  const neu = !(String(ziel.d[4]).toLowerCase() === 'true');
+  sheet('Benutzer').getRange(ziel.zeile, 5).setValue(neu);
+
+  if (!neu) sitzungenBeenden(b.email);   // Deaktivieren meldet sofort ab
+  return out({ ok: true, aktiv: neu });
+}
+
+
+function adminReset(b) {
+  const ziel = benutzerZeile(b.email);
+  if (!ziel) return out({ ok: false, error: 'unbekannt' });
+
+  const mailSchicken = b.mail !== false;
+  let pw, mailOk = mailSchicken;
+
+  try {
+    pw = zugangSenden(ziel.zeile, String(ziel.d[0]).trim(),
+                      String(ziel.d[1]).trim(), mailSchicken);
+  } catch (err) {
+    return out({ ok: false, error: 'Mail fehlgeschlagen: ' + err.message });
+  }
+
+  sitzungenBeenden(b.email);
+  return out({ ok: true,
+               email: String(ziel.d[0]).trim(), name: String(ziel.d[1]).trim(),
+               pw: pw, mail: mailOk });
+}
+
+
+function adminRolle(b, u) {
+  const sh   = sheet('Benutzer');
+  const head = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+  const iR   = head.indexOf('Rolle');
+  if (iR < 0) return out({ ok: false, error: 'Spalte Rolle fehlt' });
+
+  if (String(b.email).trim().toLowerCase() === String(u.email).trim().toLowerCase()) {
+    return out({ ok: false, error: 'eigene Rolle nicht möglich' });
+  }
+
+  const ziel = benutzerZeile(b.email);
+  if (!ziel) return out({ ok: false, error: 'unbekannt' });
+
+  const neu = String(ziel.d[iR]).trim().toLowerCase() === 'admin' ? '' : 'admin';
+  sh.getRange(ziel.zeile, iR + 1).setValue(neu);
+  return out({ ok: true, rolle: neu });
+}
+
+
+function sitzungenBeenden(email) {
+  const ses  = sheet('Sessions');
+  const rows = ses.getDataRange().getValues();
+  for (let i = rows.length - 1; i >= 1; i--) {
+    if (String(rows[i][1]).trim().toLowerCase() === String(email).trim().toLowerCase()) {
+      ses.deleteRow(i + 1);
+    }
+  }
+}
+
+
+/** Legt für alle aktiven Benutzer den persönlichen Ordner an,
+ *  damit das nicht beim ersten Foto während der Erfassung passiert. */
+function ordnerAnlegen() {
+  const rows = sheet('Benutzer').getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const iEml = head.indexOf('Email');
+  const iNam = head.indexOf('Name');
+
+  rows.forEach(r => {
+    const email = String(r[iEml] || '').trim();
+    if (!email) return;
+    const ordner = benutzerOrdner({ email: email, name: String(r[iNam]).trim() });
+    Logger.log(email + ' → ' + ordner.getName() + ' (' + ordner.getId() + ')');
+  });
+}
+
+
+/** Optional: als Zeitauslöser wöchentlich laufen lassen. */
+function sessionsAufraeumen() {
+  const sh = sheet('Sessions');
+  const rows = sh.getDataRange().getValues();
+  const jetzt = new Date();
+  for (let i = rows.length - 1; i >= 1; i--) {
+    if (new Date(rows[i][2]) < jetzt) sh.deleteRow(i + 1);
+  }
+}
+
+/**
+ * Wöchentliche Sicherung.
+ *
+ * Kopiert die GESAMTE Tabelle — nicht nur "Belege", sondern auch
+ * "Benutzer" mit den Passwort-Hashes, "Konten", "Kostenstellen",
+ * "Parameter" und "Sessions".
+ *
+ * Einrichten: im Editor links auf "Auslöser" → "Auslöser hinzufügen" →
+ * Funktion: sicherung → Zeitgesteuert → Wochentimer → Sonntag 03:00.
+ */
+
+const SICHERUNG_ORDNER = '1cxpDY9-MIz5gl4dboBfPnM3jrBuamZNr';   // eigener Ordner, nicht der für Fotos
+const SICHERUNG_TAGE   = 120;                      // ältere Sicherungen werden entfernt
+
+function sicherung() {
+  const ordner  = DriveApp.getFolderById(SICHERUNG_ORDNER);
+  const stempel = Utilities.formatDate(new Date(), 'Europe/Zurich', 'yyyy-MM-dd_HHmm');
+
+  try {
+    DriveApp.getFileById(SHEET_ID)
+      .makeCopy('Spesen-Sicherung ' + stempel, ordner);
+  } catch (err) {
+    sicherungMelden('Sicherung fehlgeschlagen: ' + err.message);
+    throw err;
+  }
+
+  altSicherungenEntfernen(ordner);
+}
+
+/** Sicherungen älter als SICHERUNG_TAGE in den Papierkorb legen. */
+function altSicherungenEntfernen(ordner) {
+  const grenze  = new Date(Date.now() - SICHERUNG_TAGE * 86400000);
+  const dateien = ordner.getFiles();
+  while (dateien.hasNext()) {
+    const d = dateien.next();
+    if (d.getName().indexOf('Spesen-Sicherung ') === 0 &&
+        d.getDateCreated() < grenze) {
+      d.setTrashed(true);
+    }
+  }
+}
+
+/** Stille Fehler sind bei Sicherungen das eigentliche Risiko. */
+function sicherungMelden(text) {
+  try {
+    MailApp.sendEmail({
+      to: ANTWORT_MAIL,
+      subject: 'Spesenerfassung — Sicherung',
+      body: text + '\n\nZeit: ' +
+            Utilities.formatDate(new Date(), 'Europe/Zurich', 'dd.MM.yyyy HH:mm')
+    });
+  } catch (e) { /* Mailversand darf die Sicherung nicht zusätzlich stören */ }
+}
+
+/** Einmal von Hand ausführen, um Ordner-ID und Berechtigung zu prüfen. */
+function sicherungTesten() {
+  sicherung();
+  const dateien = DriveApp.getFolderById(SICHERUNG_ORDNER).getFiles();
+  let n = 0;
+  while (dateien.hasNext()) { dateien.next(); n++; }
+  Logger.log('Sicherung erstellt. Dateien im Ordner: ' + n);
+}
