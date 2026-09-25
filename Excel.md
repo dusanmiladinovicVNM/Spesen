@@ -3,6 +3,8 @@
 `.xlsm` na SharePointu, list `Vorlage`. Šablon se ne prepravlja: podaci
 ulaze u skriveni list `Daten`, a šablon ih dohvata formulom.
 
+![List Vorlage](excel/vorlage.png)
+
 ```
 Apps Script  ─CSV─▶  Power Query (tabela Belege, list Daten)  ─FILTER─▶  Vorlage B7:G31
              ─Foto─▶  SpesenBild.applescript  ─▶  ~/Downloads        ◀─ klik na J

@@ -29,6 +29,7 @@ excel/
   BelegFoto.bas              VBA modul: kolona Foto, preuzimanje fotografije
   Vorlage-Blattmodul.vba     klik na "Herunterladen" (modul lista Vorlage)
   SpesenBild.applescript     snima fotografiju u Downloads (jednom po Macu)
+  vorlage.png                izgled lista Vorlage (kolone A–H, J slobodna)
 
 README.md                    ovaj fajl
 Excel.md                     povezivanje šablona, kolona Foto, SharePoint
