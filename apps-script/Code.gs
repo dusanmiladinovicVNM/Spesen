@@ -378,6 +378,12 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.CSV);
   }
 
+  // Beleg-Foto für die Excel-Vorlage — gleicher Schlüssel wie der CSV
+  if (p.format === 'bild') {
+    if (p.token !== TOKEN_READ) return ContentService.createTextOutput('FEHLER: auth');
+    return bildExport(p.id);
+  }
+
   const u = session(p.session);
   if (!u) return out({ ok: false, error: 'session' });
 
@@ -458,6 +464,38 @@ function aktiveListe(name) {
     .map(r => ({ nr: String(r[0]).trim(), bez: String(r[1]).trim() }));
 }
 
+/** Foto als Base64-Text. ContentService kann keine Binärdaten liefern;
+ *  das AppleScript neben Excel dekodiert den Text zur .jpg-Datei.
+ *  Fehler beginnen mit "FEHLER:", damit das Skript sie erkennt. */
+function bildExport(id) {
+  const fehler = t => ContentService.createTextOutput('FEHLER: ' + t);
+
+  id = String(id || '').trim();
+  if (!/^[-\w]{25,}$/.test(id)) return fehler('ungültige ID');
+
+  // Nur Fotos, die in "Belege" verlinkt sind. Das Skript läuft mit den
+  // Rechten des Eigentümers — ohne diese Prüfung liesse sich mit dem
+  // Token jede Datei aus dessen Drive laden.
+  const rows = sheet('Belege').getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const iBld = head.indexOf('BildUrl');
+  const iSto = head.indexOf('Storniert');
+  if (iBld < 0 || iSto < 0) return fehler('Spalte fehlt');
+
+  const bekannt = rows.some(r =>
+    String(r[iSto]).toLowerCase() !== 'true' &&
+    (String(r[iBld] || '').match(/[-\w]{25,}/) || [])[0] === id);
+  if (!bekannt) return fehler('Foto nicht gefunden');
+
+  try {
+    const blob = DriveApp.getFileById(id).getBlob();
+    return ContentService.createTextOutput(Utilities.base64Encode(blob.getBytes()));
+  } catch (err) {
+    return fehler('Datei nicht lesbar');
+  }
+}
+
 
 // ============================================================
 //  Schreiben
@@ -482,6 +520,10 @@ function doPost(e) {
       if (b.action === 'admin_aktiv') return adminAktiv(b, u);
       if (b.action === 'admin_reset') return adminReset(b, u);
       if (b.action === 'admin_rolle') return adminRolle(b, u);
+      if (b.action === 'admin_stamm')         return adminStamm();
+      if (b.action === 'admin_stamm_neu')     return adminStammNeu(b);
+      if (b.action === 'admin_stamm_aendern') return adminStammAendern(b);
+      if (b.action === 'admin_stamm_aktiv')   return adminStammAktiv(b);
       return out({ ok: false, error: 'unbekannte Aktion' });
     }
 
@@ -926,6 +968,152 @@ function sitzungenBeenden(email) {
       ses.deleteRow(i + 1);
     }
   }
+}
+
+
+// ============================================================
+//  Konten und Kostenstellen
+//  Löschen gibt es bewusst nicht: erfasste Belege tragen Nr und
+//  Bezeichnung als Kopie, "Deaktivieren" nimmt den Eintrag nur
+//  aus der Auswahl. Die Nr ist der Schlüssel und bleibt fest —
+//  für eine neue Nr wird ein neuer Eintrag angelegt.
+//  Spalten wie in aktiveListe(): Nr | Bezeichnung | Aktiv | Sortierung
+// ============================================================
+
+const STAMM_BLAETTER = ['Konten', 'Kostenstellen'];
+
+/** Nur diese beiden Blätter — der Blattname kommt vom Client. */
+function stammBlatt(liste) {
+  return STAMM_BLAETTER.indexOf(liste) >= 0 ? sheet(liste) : null;
+}
+
+/** Alle Einträge inklusive inaktiver, sortiert wie in der App. */
+function stammAlle(liste) {
+  const rows = sheet(liste).getDataRange().getValues();
+  rows.shift();
+  return rows
+    .map((r, i) => ({
+      zeile: i + 2,
+      nr:    String(r[0]).trim(),
+      bez:   String(r[1]).trim(),
+      aktiv: String(r[2]).toLowerCase() === 'true',
+      sort:  Number(r[3]) || 0
+    }))
+    .filter(x => x.nr !== '')
+    .sort((a, b) => a.sort - b.sort);
+}
+
+/** Konten, die heute oder künftig als KmKonto gelten.
+ *  Sie bleiben aktiv, sonst fehlt der Fahrt die Kontobezeichnung. */
+function kmKonten() {
+  const heute = Utilities.formatDate(new Date(), 'Europe/Zurich', 'yyyy-MM-dd');
+  const nr = [String(parameter('KmKonto', heute) || '').trim()];
+
+  const rows = sheet('Parameter').getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const iS = head.indexOf('Schluessel');
+  const iW = head.indexOf('Wert');
+  const iA = head.indexOf('GueltigAb');
+  if (iS >= 0 && iW >= 0 && iA >= 0) {
+    rows.forEach(r => {
+      if (String(r[iS]).trim() === 'KmKonto' && String(r[iA] || '').trim() > heute) {
+        nr.push(String(r[iW]).trim());
+      }
+    });
+  }
+  return nr.filter(Boolean);
+}
+
+/** Nr neuer Einträge: Ziffern, Buchstaben, Punkt, Bindestrich. */
+function nrPruefen(nr) {
+  return /^[A-Za-z0-9][A-Za-z0-9.\-]{0,19}$/.test(nr) ? '' : 'Nr ungültig';
+}
+
+/** Keine spitzen Klammern (landet im HTML der App),
+ *  kein führendes "=" (würde in Sheets zur Formel). */
+function bezPruefen(bez) {
+  if (!bez)                                      return 'Bezeichnung fehlt';
+  if (/[<>]/.test(bez) || bez.charAt(0) === '=') return 'Bezeichnung ungültig';
+  return '';
+}
+
+function adminStamm() {
+  const ohneZeile = x => ({ nr: x.nr, bez: x.bez, aktiv: x.aktiv, sort: x.sort });
+  return out({ ok: true,
+    konten:        stammAlle('Konten').map(ohneZeile),
+    kostenstellen: stammAlle('Kostenstellen').map(ohneZeile),
+    kmKonten:      kmKonten()
+  });
+}
+
+function adminStammNeu(b) {
+  const sh = stammBlatt(b.liste);
+  if (!sh) return out({ ok: false, error: 'unbekannte Liste' });
+
+  const nr  = String(b.nr  || '').trim();
+  const bez = String(b.bez || '').trim();
+  const fehler = nrPruefen(nr) || bezPruefen(bez);
+  if (fehler) return out({ ok: false, error: fehler });
+
+  const alle = stammAlle(b.liste);
+  const da   = alle.filter(x => x.nr.toLowerCase() === nr.toLowerCase())[0];
+  if (da) return out({ ok: false, error: da.aktiv ? 'existiert bereits' : 'existiert inaktiv' });
+
+  let sort = alle.reduce((m, x) => Math.max(m, x.sort), 0) + 10;   // ans Ende
+  if (String(b.sort || '').trim() !== '') {
+    sort = Number(b.sort);
+    if (isNaN(sort)) return out({ ok: false, error: 'Sortierung ungültig' });
+  }
+
+  const zeile = sh.getLastRow() + 1;
+  sh.getRange(zeile, 1, 1, 2).setNumberFormat('@');   // führende Nullen bleiben
+  sh.getRange(zeile, 1, 1, 4).setValues([[nr, bez, true, sort]]);
+  return out({ ok: true });
+}
+
+function adminStammAendern(b) {
+  const sh = stammBlatt(b.liste);
+  if (!sh) return out({ ok: false, error: 'unbekannte Liste' });
+
+  const x = stammAlle(b.liste).filter(e => e.nr === String(b.nr || '').trim())[0];
+  if (!x) return out({ ok: false, error: 'unbekannt' });
+
+  const bez = String(b.bez || '').trim();
+  const fehler = bezPruefen(bez);
+  if (fehler) return out({ ok: false, error: fehler });
+
+  let sort = x.sort;
+  if (String(b.sort || '').trim() !== '') {
+    sort = Number(b.sort);
+    if (isNaN(sort)) return out({ ok: false, error: 'Sortierung ungültig' });
+  }
+
+  sh.getRange(x.zeile, 2).setNumberFormat('@').setValue(bez);
+  sh.getRange(x.zeile, 4).setValue(sort);
+  return out({ ok: true });
+}
+
+function adminStammAktiv(b) {
+  const sh = stammBlatt(b.liste);
+  if (!sh) return out({ ok: false, error: 'unbekannte Liste' });
+
+  const alle = stammAlle(b.liste);
+  const x = alle.filter(e => e.nr === String(b.nr || '').trim())[0];
+  if (!x) return out({ ok: false, error: 'unbekannt' });
+
+  if (x.aktiv) {
+    if (b.liste === 'Konten' && kmKonten().indexOf(x.nr) >= 0) {
+      return out({ ok: false, error: 'Kilometerkonto' });
+    }
+    // ohne aktiven Eintrag lässt sich kein Beleg mehr speichern
+    if (alle.filter(e => e.aktiv).length <= 1) {
+      return out({ ok: false, error: 'letzter Eintrag' });
+    }
+  }
+
+  sh.getRange(x.zeile, 3).setValue(!x.aktiv);
+  return out({ ok: true, aktiv: !x.aktiv });
 }
 
 
