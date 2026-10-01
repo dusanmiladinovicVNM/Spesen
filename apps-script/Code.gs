@@ -585,13 +585,33 @@ function doPost(e) {
   }
 }
 
+/** Datum und Abrechnungsperiode, gemeinsam für Beleg und Fahrt.
+ *  Die App füllt Monat und Jahr vor; die Prüfung hier hält auch
+ *  Anfragen ab, die nicht aus der App kommen. Gibt den Fehlercode
+ *  zurück oder ''. */
+function periodePruefen(b) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.datum || ''))) return 'datum';
+  const monat = Number(b.monat), jahr = Number(b.jahr);
+  if (!Number.isInteger(monat) || monat < 1 || monat > 12)     return 'periode';
+  if (!Number.isInteger(jahr) || jahr < 2000 || jahr > 2100)   return 'periode';
+  return '';
+}
+
 function beleg(b, u) {
   const brutto = Number(b.brutto);
   if (!brutto || brutto <= 0) return out({ ok: false, error: 'betrag' });
   if (!b.kontoNr || !b.kstNr)  return out({ ok: false, error: 'konto' });
-  if (!b.datum)                return out({ ok: false, error: 'datum' });
+  const fehler = periodePruefen(b);
+  if (fehler)                  return out({ ok: false, error: fehler });
 
+  // Number('') wäre 0 — ein fehlender Satz darf nicht als 0 % durchgehen
   const satz  = Number(b.mwstSatz);                       // 8.1
+  if (b.mwstSatz === '' || b.mwstSatz == null || !isFinite(satz) || satz < 0 || satz >= 100) {
+    return out({ ok: false, error: 'mwst' });
+  }
+  if (String(b.bemerkung || '').trim() === '')        return out({ ok: false, error: 'bemerkung' });
+  // ohne "base64," würde bildSpeichern() still nichts speichern
+  if (String(b.bild || '').indexOf('base64,') < 0)    return out({ ok: false, error: 'foto' });
   const mwst  = round2(brutto - brutto / (1 + satz / 100));
   const netto = round2(brutto - mwst);
 
@@ -651,8 +671,10 @@ function beleg(b, u) {
 function fahrt(b, u) {
   const km = Number(b.km);
   if (!km || km <= 0) return out({ ok: false, error: 'km' });
-  if (!b.datum)       return out({ ok: false, error: 'datum' });
+  const fehler = periodePruefen(b);
+  if (fehler)         return out({ ok: false, error: fehler });
   if (!b.kstNr)       return out({ ok: false, error: 'konto' });
+  if (String(b.bemerkung || '').trim() === '') return out({ ok: false, error: 'zweck' });
 
   const satz = Number(parameter('KmSatz', b.datum));
   if (!satz) return out({ ok: false, error: 'kmsatz' });

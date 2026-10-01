@@ -62,8 +62,8 @@ Oben steht der Umschalter **Beleg / Fahrt**. Für Quittungen bleibt **Beleg** ge
 | **MWSt-Satz** | 8,1% ist voreingestellt; bei Lebensmitteln und Getränken meist 2,6%, bei Übernachtungen 3,8% |
 | **Konto** | aus der Liste wählen — Sie können auch die Nummer oder einen Teil der Bezeichnung eintippen |
 | **Kostenstelle** | aus der Liste wählen |
-| **Beleg-Foto** | freiwillig, siehe unten |
-| **Bemerkung** | Lieferant, Ort und Zweck — zum Beispiel «Papeterie Meier, Zürich, Projekt Nord» |
+| **Beleg-Foto** | Pflicht, siehe unten |
+| **Bemerkung** | Pflicht: Lieferant, Ort und Zweck — zum Beispiel «Papeterie Meier, Zürich, Projekt Nord» |
 
 Zum Schluss auf **Speichern** tippen.
 
@@ -79,7 +79,7 @@ Auf **Foto aufnehmen** tippen — die Kamera öffnet sich. Nach der Aufnahme seh
 
 Das Foto wird vor dem Senden verkleinert, damit es auch bei schwachem Empfang rasch geht. Der Beleg bleibt lesbar.
 
-Sie brauchen kein Foto zu machen — der Beleg wird auch ohne gespeichert.
+Ohne Foto lässt sich der Beleg nicht speichern.
 
 ---
 
@@ -93,7 +93,7 @@ Oben auf **Fahrt** umschalten. Es bleiben nur wenige Felder:
 | **Datum** | Tag der Fahrt |
 | **Gefahrene Kilometer** | Anzahl Kilometer an diesem Tag |
 | **Kostenstelle** | aus der Liste wählen |
-| **Strecke / Zweck** | zum Beispiel «Zürich–Bern, Kundenbesuch» |
+| **Strecke / Zweck** | Pflicht, zum Beispiel «Zürich–Bern, Kundenbesuch» |
 
 Der Betrag wird aus den Kilometern berechnet und unter dem Feld angezeigt. Konto und MWSt setzt das System selbst.
 

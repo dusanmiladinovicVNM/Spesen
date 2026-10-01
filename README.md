@@ -200,7 +200,7 @@ Ako knjigovodstvo nema Google nalog, postavi `BILD_OEFFENTLICH = true` —
 tada link iz kolone `BildUrl` radi bez prijave. Cena je da svako ko dobije
 link vidi taj račun.
 
-**Excel.** U koloni **J**, desno od tabele, svaki red sa fotografijom ima
+**Excel.** U koloni **K**, desno od tabele, svaki red sa fotografijom ima
 link **Herunterladen**. Link vodi na `foto.html` pored aplikacije, koja
 fotografiju odmah snima u Downloads. Potpisan je, pa otvara samo tu jednu
 fotografiju, bez tokena i bez Google naloga. Šablon se ne dira, samo se proširuje udesno.
@@ -215,8 +215,9 @@ U formularu je prekidač **Beleg / Fahrt**. Kod vožnje korisnik unosi samo
 datum, broj kilometara i kostenstelle; iznos se računa kao `km × KmSatz`.
 
 Red završava u istom listu `Belege` sa `Art = Fahrt`, `MwstSatz = 0`
-i `Bemerkung` u obliku `120 km à 0.70 — Zürich–Bern`. Excel šablon se
-ne menja: vožnja je za njega običan red.
+i `Bemerkung` u obliku `120 km à 0.70 — Zürich–Bern`. U Excel šablonu
+kolona **KM** (`G`) pokazuje kilometre, a red Total njihov zbir
+(`Excel.md`, odeljak 3).
 
 **Jedan unos po osobi i danu.** Ponovni unos za isti datum ne pravi drugi
 red nego nudi zamenu postojećeg. Ključ je `email|datum|fahrt`.
@@ -310,7 +311,7 @@ pa pokreni `zugangVerschicken` ponovo.
 | 12 | Druga Fahrt za isti dan | pitanje o zameni, ne drugi red |
 | 13 | Fahrt sa datumom pre `GueltigAb` nove stope | računa se sa starom stopom |
 | 14 | Beleg sa fotografijom | fajl u Driveu, link u `BildUrl` |
-| 15 | Beleg bez fotografije | prolazi normalno, `BildUrl` prazan |
+| 15 | Beleg bez fotografije ili bez Bemerkung | odbijeno: *Beleg-Foto* odnosno *Bemerkung ist erforderlich* |
 | 16 | Fotografija na slaboj vezi | dugme pokazuje napredak, bez tihog gubitka |
 | 17 | Dva radnika sa fotografijama istog dana | svaka slika u svom folderu |
 | 18 | Obrisan folder u Driveu, pa nova fotografija | folder se napravi ponovo |
@@ -328,7 +329,7 @@ pa pokreni `zugangVerschicken` ponovo.
 | 30 | Deaktivacija konta | nestaje iz izbora, stari belezi i Excel nepromenjeni |
 | 31 | Deaktivacija `KmKonto` / poslednje Kostenstelle | odbijeno |
 | 32 | Excel: klik na *Herunterladen* | browser se otvori, `Ime JJJJ-MM-DD_iznos_nr.jpg` odmah u Downloads |
-| 33 | Excel: red bez fotografije | kolona J prazna |
+| 33 | Excel: red vožnje (bez fotografije) | kolona K prazna |
 | 34 | Link sa izmenjenim `id` ili `sig` | *Dieser Link ist ungültig* |
 | 35 | Link u browseru prijavljenom na više Google naloga | radi isto kao u privatnom prozoru |
 
