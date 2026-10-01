@@ -912,6 +912,9 @@ const FEHLER_TEXT = {
   datum:   'Datum fehlt oder ist ungültig.',
   periode: 'Monat und Jahr sind erforderlich.',
   mwst:    'MWSt-Satz fehlt oder ist ungültig.',
+  foto:    'Beleg-Foto ist erforderlich.',
+  bemerkung: 'Bemerkung ist erforderlich.',
+  zweck:   'Strecke / Zweck ist erforderlich.',
   km:      'Kilometer fehlen.'
 };
 
@@ -929,6 +932,8 @@ async function speichern(ersetzen) {
     toast('Monat und Jahr sind erforderlich.', 'err'); return;
   }
   if ($('fm-mwst').value === '') { toast('MWSt-Satz ist erforderlich.', 'err'); return; }
+  if (!S.bild) { toast('Beleg-Foto ist erforderlich.', 'err'); return; }
+  if (!$('fm-bemerkung').value.trim()) { toast('Bemerkung ist erforderlich.', 'err'); return; }
 
   const kontoOpt = $('fm-konto').selectedOptions[0].textContent;
   const kstOpt   = $('fm-kst').selectedOptions[0].textContent;
@@ -985,6 +990,7 @@ async function speichernFahrt(ersetzen) {
     toast('Monat und Jahr sind erforderlich.', 'err'); return;
   }
   if (!$('fm-kst').value)   { toast('Kostenstelle ist erforderlich.', 'err'); return; }
+  if (!$('fm-bemerkung').value.trim()) { toast('Strecke / Zweck ist erforderlich.', 'err'); return; }
 
   const kstOpt = $('fm-kst').selectedOptions[0].textContent;
 

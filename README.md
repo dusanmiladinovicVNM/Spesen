@@ -311,7 +311,7 @@ pa pokreni `zugangVerschicken` ponovo.
 | 12 | Druga Fahrt za isti dan | pitanje o zameni, ne drugi red |
 | 13 | Fahrt sa datumom pre `GueltigAb` nove stope | računa se sa starom stopom |
 | 14 | Beleg sa fotografijom | fajl u Driveu, link u `BildUrl` |
-| 15 | Beleg bez fotografije | prolazi normalno, `BildUrl` prazan |
+| 15 | Beleg bez fotografije ili bez Bemerkung | odbijeno: *Beleg-Foto* odnosno *Bemerkung ist erforderlich* |
 | 16 | Fotografija na slaboj vezi | dugme pokazuje napredak, bez tihog gubitka |
 | 17 | Dva radnika sa fotografijama istog dana | svaka slika u svom folderu |
 | 18 | Obrisan folder u Driveu, pa nova fotografija | folder se napravi ponovo |
@@ -329,7 +329,7 @@ pa pokreni `zugangVerschicken` ponovo.
 | 30 | Deaktivacija konta | nestaje iz izbora, stari belezi i Excel nepromenjeni |
 | 31 | Deaktivacija `KmKonto` / poslednje Kostenstelle | odbijeno |
 | 32 | Excel: klik na *Herunterladen* | browser se otvori, `Ime JJJJ-MM-DD_iznos_nr.jpg` odmah u Downloads |
-| 33 | Excel: red bez fotografije | kolona J prazna |
+| 33 | Excel: red vožnje (bez fotografije) | kolona K prazna |
 | 34 | Link sa izmenjenim `id` ili `sig` | *Dieser Link ist ungültig* |
 | 35 | Link u browseru prijavljenom na više Google naloga | radi isto kao u privatnom prozoru |
 

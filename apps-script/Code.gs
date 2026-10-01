@@ -609,6 +609,9 @@ function beleg(b, u) {
   if (b.mwstSatz === '' || b.mwstSatz == null || !isFinite(satz) || satz < 0 || satz >= 100) {
     return out({ ok: false, error: 'mwst' });
   }
+  if (String(b.bemerkung || '').trim() === '')        return out({ ok: false, error: 'bemerkung' });
+  // ohne "base64," würde bildSpeichern() still nichts speichern
+  if (String(b.bild || '').indexOf('base64,') < 0)    return out({ ok: false, error: 'foto' });
   const mwst  = round2(brutto - brutto / (1 + satz / 100));
   const netto = round2(brutto - mwst);
 
@@ -671,6 +674,7 @@ function fahrt(b, u) {
   const fehler = periodePruefen(b);
   if (fehler)         return out({ ok: false, error: fehler });
   if (!b.kstNr)       return out({ ok: false, error: 'konto' });
+  if (String(b.bemerkung || '').trim() === '') return out({ ok: false, error: 'zweck' });
 
   const satz = Number(parameter('KmSatz', b.datum));
   if (!satz) return out({ ok: false, error: 'kmsatz' });
