@@ -417,6 +417,7 @@ button.gross{
       <button id="fm-speichern" class="gross primaer">Speichern</button>
       <button id="fm-liste" class="gross sekundaer">Belege anzeigen</button>
       <button id="fm-admin" class="gross sekundaer" hidden>Benutzer verwalten</button>
+      <button id="fm-stamm" class="gross sekundaer" hidden>Konten &amp; Kostenstellen</button>
       <button id="fm-passwort" class="gross sekundaer">Passwort ändern</button>
       <button id="fm-abmelden" class="gross sekundaer">Abmelden</button>
     </div>
@@ -469,6 +470,45 @@ button.gross{
 
     <hr class="trennlinie">
     <div id="adm-liste"></div>
+  </div>
+</section>
+
+<!-- ============ KONTEN & KOSTENSTELLEN ============ -->
+<section id="scr-stamm" class="screen">
+  <header class="kopf-liste">
+    <button class="zurueck" id="stm-zurueck" aria-label="Zurück">&#8592;</button>
+    <h1>Konten &amp; Kostenstellen</h1>
+  </header>
+
+  <div class="scroll">
+    <div class="tabs">
+      <button class="tab an" data-liste="Konten" type="button">Konten</button>
+      <button class="tab"    data-liste="Kostenstellen" type="button">Kostenstellen</button>
+    </div>
+
+    <label for="stm-nr">Nr.</label>
+    <input id="stm-nr" type="text" autocapitalize="characters" placeholder="z.B. 4430">
+
+    <label for="stm-bez">Bezeichnung</label>
+    <input id="stm-bez" type="text">
+
+    <label for="stm-sort">Sortierung</label>
+    <input id="stm-sort" type="text" inputmode="numeric" placeholder="leer = ans Ende">
+
+    <div id="stm-meldung" class="meldung err"></div>
+
+    <div class="knopfzeile">
+      <button id="stm-senden" class="gross primaer">Hinzufügen</button>
+      <button id="stm-abbrechen" class="gross sekundaer" hidden>Abbrechen</button>
+    </div>
+
+    <p style="font-size:12px;color:var(--grau);margin-top:8px">
+      Die Nr. lässt sich nicht ändern. Für eine neue Nr. einen neuen Eintrag
+      anlegen und den alten deaktivieren — erfasste Belege bleiben unverändert.
+    </p>
+
+    <hr class="trennlinie">
+    <div id="stm-liste"></div>
   </div>
 </section>
 
@@ -581,6 +621,12 @@ function zahl(text) {
   const s = String(text || '').replace(/\s/g, '').replace(',', '.');
   const n = parseFloat(s);
   return isNaN(n) ? 0 : n;
+}
+
+/** Für Werte, die über innerHTML in die Seite gelangen. */
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
 /** Trennstrich blasser setzen als den Inhalt. */
@@ -763,7 +809,7 @@ function fuelleMonatJahr() {
 
 function fuelleStammdaten() {
   const opt = a => a
-    .map(x => `<option value="${x.nr}">${x.nr} · ${x.bez}</option>`).join('');
+    .map(x => `<option value="${esc(x.nr)}">${esc(x.nr)} · ${esc(x.bez)}</option>`).join('');
   $('fm-konto').innerHTML = '<option value="">– wählen –</option>' + opt(S.konten);
   $('fm-kst').innerHTML   = '<option value="">– wählen –</option>' + opt(S.kst);
 }
@@ -816,7 +862,7 @@ function fotoWeg() {
 
 function setzeArt(art) {
   S.art = art;
-  document.querySelectorAll('.tab').forEach(t =>
+  document.querySelectorAll('.tab[data-art]').forEach(t =>
     t.classList.toggle('an', t.dataset.art === art));
   document.querySelectorAll('[data-nur]').forEach(el =>
     el.hidden = el.dataset.nur !== art);
@@ -1111,6 +1157,7 @@ async function stornoKlick(i, btn) {
 async function start() {
   $('fm-name').textContent = S.name;
   $('fm-admin').hidden = S.rolle !== 'admin';
+  $('fm-stamm').hidden = S.rolle !== 'admin';
   fuelleMonatJahr();
   $('fm-datum').value = heute();
   zeigeScreen('scr-form');
@@ -1309,6 +1356,204 @@ async function adminNeu() {
   }
 }
 
+/* ---------- Konten & Kostenstellen ---------- */
+
+const STAMM = { liste: 'Konten', daten: null, nr: null };   // nr = Eintrag in Bearbeitung
+
+const STAMM_FEHLER = {
+  'existiert bereits':    'Diese Nr. besteht bereits.',
+  'existiert inaktiv':    'Diese Nr. besteht bereits, ist aber inaktiv. Bitte unten aktivieren.',
+  'Nr ungültig':          'Die Nr. darf nur Ziffern, Buchstaben, Punkt und Bindestrich enthalten.',
+  'Bezeichnung fehlt':    'Bitte die Bezeichnung eingeben.',
+  'Bezeichnung ungültig': 'Die Bezeichnung darf kein < oder > enthalten und nicht mit = beginnen.',
+  'Sortierung ungültig':  'Die Sortierung muss eine Zahl sein.',
+  'Kilometerkonto':       'Dieses Konto ist für Kilometerkosten hinterlegt und bleibt aktiv.',
+  'letzter Eintrag':      'Mindestens ein Eintrag muss aktiv bleiben.'
+};
+
+async function stammOeffnen() {
+  stammFormLeeren();
+  $('stm-liste').innerHTML = '<div class="leer">Wird geladen …</div>';
+  zeigeScreen('scr-stamm');
+  await stammLaden();
+}
+
+async function stammLaden() {
+  try {
+    const r = await post({ session: S.session, action: 'admin_stamm' });
+    if (!r.ok) {
+      if (r.error === 'session') return sessionWeg();
+      $('stm-liste').innerHTML = '<div class="leer">' + esc(r.error) + '</div>';
+      return;
+    }
+    STAMM.daten = r;
+    stammUebernehmen(r);
+    stammZeichnen();
+  } catch (e) {
+    $('stm-liste').innerHTML = '<div class="leer">Keine Verbindung.</div>';
+  }
+}
+
+/** Aktive Einträge gleich ins Formular übernehmen — sonst sähe der Admin
+ *  seine Änderung erst nach dem nächsten Start. Die Auswahl bleibt stehen. */
+function stammUebernehmen(d) {
+  const aktiv = a => a.filter(x => x.aktiv).map(x => ({ nr: x.nr, bez: x.bez }));
+  S.konten = aktiv(d.konten);
+  S.kst    = aktiv(d.kostenstellen);
+  localStorage.setItem('stammdaten', JSON.stringify(
+    { konten: S.konten, kostenstellen: S.kst, kmSaetze: S.kmSaetze }));
+
+  const konto = $('fm-konto').value, kst = $('fm-kst').value;
+  fuelleStammdaten();
+  // deaktivierter Eintrag → zurück auf "– wählen –" statt leerer Auswahl
+  $('fm-konto').value = konto; if ($('fm-konto').selectedIndex < 0) $('fm-konto').value = '';
+  $('fm-kst').value   = kst;   if ($('fm-kst').selectedIndex   < 0) $('fm-kst').value   = '';
+}
+
+function stammEintraege() {
+  if (!STAMM.daten) return [];
+  return STAMM.liste === 'Konten' ? STAMM.daten.konten : STAMM.daten.kostenstellen;
+}
+
+function stammZeichnen() {
+  document.querySelectorAll('.tab[data-liste]').forEach(t =>
+    t.classList.toggle('an', t.dataset.liste === STAMM.liste));
+
+  const el    = $('stm-liste');
+  const liste = stammEintraege();
+  if (!liste.length) { el.innerHTML = '<div class="leer">Keine Einträge.</div>'; return; }
+
+  const km = STAMM.liste === 'Konten' ? (STAMM.daten.kmKonten || []) : [];
+
+  el.innerHTML = liste.map(x => {
+    const kmKonto = km.indexOf(x.nr) >= 0;
+    const marken =
+      (!x.aktiv  ? '<span class="marke aus">inaktiv</span>'    : '') +
+      (kmKonto   ? '<span class="marke adm">Kilometer</span>'  : '');
+
+    return `
+      <div class="nutzer">
+        <div class="zeile1">
+          <span class="nm">${esc(x.nr)} · ${esc(x.bez)}</span>
+          <span>${marken}</span>
+        </div>
+        <div class="ml">Sortierung ${esc(x.sort)}</div>
+        <div class="tasten">
+          <button class="klein" data-tun="bearbeiten" data-nr="${esc(x.nr)}">Bearbeiten</button>
+          <button class="klein" data-tun="aktiv" data-nr="${esc(x.nr)}" data-aktiv="${x.aktiv}"
+                  ${x.aktiv && kmKonto ? 'disabled' : ''}>
+            ${x.aktiv ? 'Deaktivieren' : 'Aktivieren'}</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  el.querySelectorAll('.klein[data-tun]').forEach(btn => {
+    btn.addEventListener('click', () => btn.dataset.tun === 'bearbeiten'
+      ? stammBearbeiten(btn.dataset.nr) : stammAktiv(btn));
+  });
+}
+
+function stammListeWaehlen(liste) {
+  STAMM.liste = liste;
+  stammFormLeeren();
+  stammZeichnen();
+}
+
+function stammFormLeeren() {
+  STAMM.nr = null;
+  $('stm-nr').value = '';
+  $('stm-nr').disabled = false;
+  $('stm-bez').value = '';
+  $('stm-sort').value = '';
+  $('stm-senden').textContent = 'Hinzufügen';
+  $('stm-abbrechen').hidden = true;
+  $('stm-meldung').classList.remove('zeigen');
+}
+
+function stammBearbeiten(nr) {
+  const x = stammEintraege().filter(e => e.nr === nr)[0];
+  if (!x) return;
+  STAMM.nr = nr;
+  $('stm-nr').value = x.nr;
+  $('stm-nr').disabled = true;
+  $('stm-bez').value = x.bez;
+  $('stm-sort').value = x.sort;
+  $('stm-senden').textContent = 'Änderung speichern';
+  $('stm-abbrechen').hidden = false;
+  $('stm-meldung').classList.remove('zeigen');
+  document.querySelector('#scr-stamm .scroll').scrollTop = 0;
+  $('stm-bez').focus();
+}
+
+async function stammSenden() {
+  const m = $('stm-meldung');
+  m.classList.remove('zeigen');
+
+  const nr   = $('stm-nr').value.trim();
+  const bez  = $('stm-bez').value.trim();
+  const sort = $('stm-sort').value.trim();
+  if (!nr || !bez) {
+    m.textContent = 'Bitte Nr. und Bezeichnung eingeben.';
+    m.classList.add('zeigen');
+    return;
+  }
+
+  const btn = $('stm-senden');
+  btn.disabled = true;
+  btn.textContent = 'Wird gespeichert …';
+
+  try {
+    const r = await post({ session: S.session,
+      action: STAMM.nr ? 'admin_stamm_aendern' : 'admin_stamm_neu',
+      liste: STAMM.liste, nr, bez, sort });
+    if (r.ok) {
+      toast(STAMM.nr ? 'Geändert.' : 'Hinzugefügt.', 'ok');
+      stammFormLeeren();
+      await stammLaden();
+    } else if (r.error === 'session') {
+      sessionWeg();
+    } else {
+      m.textContent = STAMM_FEHLER[r.error] || r.error;
+      m.classList.add('zeigen');
+    }
+  } catch (e) {
+    m.textContent = 'Keine Verbindung.';
+    m.classList.add('zeigen');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = STAMM.nr ? 'Änderung speichern' : 'Hinzufügen';
+  }
+}
+
+async function stammAktiv(btn) {
+  const deaktivieren = btn.dataset.aktiv === 'true';
+  if (!confirm(deaktivieren
+      ? 'Eintrag deaktivieren? Er erscheint nicht mehr in der Auswahl; '
+        + 'erfasste Belege bleiben unverändert.'
+      : 'Eintrag wieder aktivieren?')) return;
+
+  const alt = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '…';
+
+  try {
+    const r = await post({ session: S.session, action: 'admin_stamm_aktiv',
+                           liste: STAMM.liste, nr: btn.dataset.nr });
+    if (r.ok) {
+      toast(r.aktiv ? 'Aktiviert.' : 'Deaktiviert.', 'ok');
+      await stammLaden();
+    } else if (r.error === 'session') {
+      sessionWeg();
+    } else {
+      toast(STAMM_FEHLER[r.error] || r.error, 'err');
+      btn.disabled = false; btn.textContent = alt;
+    }
+  } catch (e) {
+    toast('Keine Verbindung.', 'err');
+    btn.disabled = false; btn.textContent = alt;
+  }
+}
+
 /* ---------- vezivanje ---------- */
 
 $('lg-senden').addEventListener('click', anmelden);
@@ -1319,7 +1564,7 @@ $('fm-km').addEventListener('input', vorschau);
 $('fm-mwst').addEventListener('change', vorschau);
 $('fm-datum').addEventListener('change', vorschau);
 $('fm-speichern').addEventListener('click', () => speichern(false));
-document.querySelectorAll('.tab').forEach(t =>
+document.querySelectorAll('.tab[data-art]').forEach(t =>
   t.addEventListener('click', () => setzeArt(t.dataset.art)));
 $('fm-foto-knopf').addEventListener('click', () => $('fm-foto').click());
 $('fm-foto').addEventListener('change', fotoGewaehlt);
@@ -1330,6 +1575,12 @@ $('fm-passwort').addEventListener('click', () => zeigePasswort(false));
 $('fm-admin').addEventListener('click', adminOeffnen);
 $('adm-zurueck').addEventListener('click', () => zeigeScreen('scr-form'));
 $('adm-neu').addEventListener('click', adminNeu);
+$('fm-stamm').addEventListener('click', stammOeffnen);
+$('stm-zurueck').addEventListener('click', () => zeigeScreen('scr-form'));
+$('stm-senden').addEventListener('click', stammSenden);
+$('stm-abbrechen').addEventListener('click', stammFormLeeren);
+document.querySelectorAll('.tab[data-liste]').forEach(t =>
+  t.addEventListener('click', () => stammListeWaehlen(t.dataset.liste)));
 $('pw-fertig').addEventListener('click', () => $('dlg-pw').classList.remove('zeigen'));
 $('pw-kopieren').addEventListener('click', async () => {
   const text = $('pw-text').value;

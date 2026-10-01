@@ -17,16 +17,21 @@ korisnik ne može uneti beleg pod tuđim imenom.
 
 ```
 apps-script/
-  Code.gs                    ceo backend — prijava, unos, Fahrt, storno, CSV
+  Code.gs                    ceo backend — prijava, unos, Fahrt, storno, CSV,
+                             stranica sa fotografijom za Excel
 
 pwa/
   index.html                 CIJELA aplikacija: CSS, HTML, logika, konfiguracija, logo
+  foto.html                  preuzimanje fotografije iz Excela (link u koloni J)
   manifest.webmanifest       ime i ikone za dodavanje na home screen
   icons/icon-192.png         ← zamijeni
   icons/icon-512.png         ← zamijeni
 
+excel/
+  vorlage.png                izgled lista Vorlage (kolone A–H, J slobodna)
+
 README.md                    ovaj fajl
-EXCEL.md                     povezivanje šablona, hosting na SharePointu
+Excel.md                     povezivanje šablona, kolona Foto, SharePoint
 ```
 
 Sve što se mijenja nalazi se u `index.html`, u tri označena bloka na vrhu:
@@ -35,7 +40,7 @@ Sve što se mijenja nalazi se u `index.html`, u tri označena bloka na vrhu:
 |---|---|
 | `:root` u `<style>` | boje; akcentna zelena je `#8FA426` |
 | `<symbol id="logo">` | logotip — zamijeni sadržaj svojim SVG-om |
-| `const CONFIG` | Web-App-URL iz Apps Scripta |
+| `const CONFIG` | Web-App-URL iz Apps Scripta; ista adresa stoji i u `foto.html` (`const API`) |
 
 **Bez service workera.** Aplikacija ionako traži mrežu za svaku radnju,
 pa cache donosi samo problem zastarjele verzije. Bez njega izmjena je
@@ -131,7 +136,7 @@ Provere na tom redu u `Belege`: `Mitarbeiter` je tvoje ime iz sesije,
 
 ## Faza 5 — Excel
 
-Detaljno u **`EXCEL.md`**. Ukratko:
+Detaljno u **`Excel.md`**. Ukratko:
 
 1. **Daten → Aus dem Web**, URL sa `&format=csv`, autentifikacija **Anonym**
 2. Prvi red kao zaglavlje, tipovi kolona, upit preimenuj u **`Belege`**
@@ -195,12 +200,11 @@ Ako knjigovodstvo nema Google nalog, postavi `BILD_OEFFENTLICH = true` —
 tada link iz kolone `BildUrl` radi bez prijave. Cena je da svako ko dobije
 link vidi taj račun.
 
-**Excel.** Kolona `BildUrl` ostaje izvan šablona. Knjigovodstvo otvara
-sam Drive folder — struktura `Osoba / Mesec / Datum_Iznos` prati način
-na koji ionako rade mesečni obračun.
-Ako link ipak treba u tabeli, dodaj `BildUrl` u Power Query i u prvoj
-slobodnoj koloni pored tabele stavi `=HYPERLINK(...)` — šablon se time
-ne dira, samo se proširuje udesno.
+**Excel.** U koloni **J**, desno od tabele, svaki red sa fotografijom ima
+link **Herunterladen**. Link vodi na `foto.html` pored aplikacije, koja
+fotografiju odmah snima u Downloads. Potpisan je, pa otvara samo tu jednu
+fotografiju, bez tokena i bez Google naloga. Šablon se ne dira, samo se proširuje udesno.
+Postavljanje je u `Excel.md`, odeljak 4.
 
 **Storno ne briše sliku.** Storniranje je povratno, pa fajl ostaje.
 Čišćenje po potrebi radi ručno u Driveu.
@@ -219,7 +223,8 @@ red nego nudi zamenu postojećeg. Ključ je `email|datum|fahrt`.
 
 Kolone `Art`, `KM` i `KmSatz` stoje na kraju lista i služe za kontrolu.
 Power Query ih ne povlači, jer korak *Andere Spalten entfernen* nabraja
-kolone poimence — ne diraj postojeći upit.
+kolone poimence. Jedini dodatak tom koraku je `BildLink`, za kolonu Foto
+(`Excel.md`, odeljak 4).
 
 ## Admin-Bereich
 
@@ -246,6 +251,34 @@ prolazi kroz istu proveru role iz sesije. To što dugme kod običnog
 korisnika nije vidljivo nije zaštita — klijent može poslati bilo šta.
 
 `zugangVerschicken()` u editoru ostaje samo za prvi nalog.
+
+## Konten & Kostenstellen
+
+Admin u formularu vidi i dugme **Konten & Kostenstellen**. Liste više ne
+treba menjati ručno u tabeli. Na vrhu je prekidač Konten / Kostenstellen,
+a za svaki unos:
+
+- **dodati:** Nr., Bezeichnung i opciono Sortierung (prazno znači na kraj)
+- **izmeniti:** Bezeichnung i Sortierung
+- **deaktivirati i ponovo aktivirati:** unos nestaje iz izbora u aplikaciji
+
+**Brisanja nema, i Nr. se ne menja.** Beleg čuva `KontoNr`/`KontoBez` i
+`KstNr`/`KstBez` kao kopiju, pa stari redovi i Excel ostaju tačni šta god
+se kasnije promeni. Za novi broj napravi novi unos i deaktiviraj stari.
+
+**Dve zaštite na serveru:**
+
+- Konto koji je u `Parameter` upisan kao `KmKonto` (važeći ili budući)
+  ne može da se deaktivira, inače bi vožnje dobijale konto bez naziva.
+- Poslednji aktivni unos u listi ne može da se deaktivira, inače niko ne
+  bi mogao da sačuva beleg.
+
+Nr. sme da sadrži samo cifre, slova, tačku i crtu. Bezeichnung ne sme da
+sadrži `<` i `>` i ne sme da počinje sa `=`. Proverava se na serveru,
+kao i uloga admina: sve ide kroz iste `admin_*` akcije.
+
+Promena je vidljiva adminu odmah. Ostali je vide pri sledećem otvaranju
+aplikacije, jer se liste osvežavaju u pozadini pri svakom startu.
 
 ## Faza 6 — Saradnici
 
@@ -290,6 +323,15 @@ pa pokreni `zugangVerschicken` ponovo.
 | 24 | Admin doda korisnika | red u tabeli, mejl stiže |
 | 25 | Admin deaktivira korisnika koji je prijavljen | njegov sledeći zahtev traži prijavu |
 | 26 | Admin pokuša da deaktivira sebe | odbijeno |
+| 27 | Admin doda Konto `5800` | red u `Konten`, odmah u izboru u formularu |
+| 28 | Isti Nr. još jednom | *Diese Nr. besteht bereits* |
+| 29 | Izmena Bezeichnung | stari belezi zadržavaju staru `KontoBez` |
+| 30 | Deaktivacija konta | nestaje iz izbora, stari belezi i Excel nepromenjeni |
+| 31 | Deaktivacija `KmKonto` / poslednje Kostenstelle | odbijeno |
+| 32 | Excel: klik na *Herunterladen* | browser se otvori, `Ime JJJJ-MM-DD_iznos_nr.jpg` odmah u Downloads |
+| 33 | Excel: red bez fotografije | kolona J prazna |
+| 34 | Link sa izmenjenim `id` ili `sig` | *Dieser Link ist ungültig* |
+| 35 | Link u browseru prijavljenom na više Google naloga | radi isto kao u privatnom prozoru |
 
 Test 1 zaključava nalog na 15 minuta — radi ga sa testnim nalogom.
 
