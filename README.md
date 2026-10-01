@@ -222,9 +222,8 @@ ne menja: vožnja je za njega običan red.
 red nego nudi zamenu postojećeg. Ključ je `email|datum|fahrt`.
 
 Kolone `Art`, `KM` i `KmSatz` stoje na kraju lista i služe za kontrolu.
-Power Query ih ne povlači, jer korak *Andere Spalten entfernen* nabraja
-kolone poimence. Jedini dodatak tom koraku je `BildLink`, za kolonu Foto
-(`Excel.md`, odeljak 4).
+Šablon ih ne koristi: formula u `B7` uzima samo `Datum:Bemerkung`. Šta CSV
+isporučuje, određuje `EXPORT_SPALTEN` u `Code.gs`.
 
 ## Admin-Bereich
 

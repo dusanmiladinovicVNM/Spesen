@@ -90,27 +90,44 @@ Google naloga i u browseru koji je prijavljen na više Google naloga.
 - **Formula filtrira i sortira isto kao `B7`**, samo uzima `BildLink`. Zato
   red 7 dobija link prvog belega, red 8 drugog, i tako dalje (`ZEILE()-6`).
   Ako ikad menjaš uslove u `B7`, promeni ih i ovde.
-- **Svaka ćelija ima svoju formulu**, umesto jedne koja se prosipa, da bi link
-  u svakoj ćeliji sigurno bio klikabilan.
+- **Svaka ćelija ima svoju formulu**, umesto jedne koja se prosipa, i
+  `HYPERLINK` je spolja, ne u `LET`. Samo tako je link sigurno klikabilan.
 - **Greška namerno nije sakrivena.** Ako `BildLink` fali u tabeli, ćelija
   pokazuje `#BEZUG!` umesto da tiho ostane prazna.
 
 ### Postavljanje, jednom za fajl
 
-1. **`BildLink` u Power Query.** Otvori **Daten → Daten abrufen → Power
-   Query-Editor starten**, upit `Belege`.
-   - Korak *Quelle*: ako formula sadrži `Columns=12`, promeni u `Columns=13`.
-     Inače Power Query tiho odseca novu, 13. kolonu.
-   - Korak *Andere entfernte Spalten* nabraja kolone poimence. Dodaj
-     `"BildLink"` na kraj liste.
-   - **Schließen & laden.** Tabela `Belege` sada ima kolonu `BildLink`.
-2. U `J5` upiši `Foto`.
-3. U `J7` upiši formulu ispod i kopiraj je do `J31`.
-4. Sačuvaj i otpremi na SharePoint.
+1. **`BildLink` u Power Query.** Prvo objavi novi `Code.gs` kao novu verziju.
+   Zatim **Daten → Daten abrufen → Power Query-Editor starten**, upit `Belege`,
+   **Aktualisieren → Vorschau aktualisieren**. Dole treba da piše
+   *Spalten: 13*, a poslednja kolona je `BildLink`.
+   - Ako upit ima samo korake *Quelle → Kopf → Typen*, ne menjaj ništa.
+     Nova kolona ulazi sama.
+   - Ako formula u koraku *Quelle* sadrži `Columns=12`, promeni u `Columns=13`.
+     Inače Power Query tiho odseca 13. kolonu.
+   - Ako postoji korak *Andere entfernte Spalten*, dodaj `"BildLink"` na kraj
+     liste.
+   - **Schließen & laden.**
+2. **Pomoćna kolona `Z`** (pored ćelije `Y1`) računa URL za svaki red.
+   U `Z7` upiši formulu ispod i kopiraj je do `Z31`:
 
-```
-=LET(z;(Belege[Mitarbeiter]=$B$3)*(Belege[Monat]=$Y$1)*(Belege[Jahr]=$G$3);n;SUMME(z);i;ZEILE()-6;WENN(i>n;"";LET(u;INDEX(SORTIEREN(FILTER(HSTAPELN(Belege[Datum];Belege[BildLink]);z);1);i;2);WENN(LINKS(u;4)="http";HYPERLINK(u;"Herunterladen");""))))
-```
+   ```
+   =LET(z;(Belege[Mitarbeiter]=$B$3)*(Belege[Monat]=$Y$1)*(Belege[Jahr]=$G$3);n;SUMME(z);i;ZEILE()-6;WENN(i>n;"";INDEX(SORTIEREN(FILTER(HSTAPELN(Belege[Datum];Belege[BildLink]);z);1);i;2)))
+   ```
+
+3. **Link.** U `J5` upiši `Foto`, u `J7` formulu ispod, i kopiraj je do `J31`:
+
+   ```
+   =WENN(LINKS(Z7;4)="http";HYPERLINK(Z7;"Herunterladen");"")
+   ```
+
+4. Proveri jedan klik, pa sakrij kolonu `Z` i sačuvaj.
+
+**Zašto dve kolone:** sa `HYPERLINK` unutar `LET` Excel za Mac je
+prikazao *Herunterladen*, ali klik nije radio ništa. Sa `HYPERLINK` spolja,
+umotanim samo u `WENN`, klik radi (provereno na Excelu za Mac).
+Pomoćna kolona usput pokazuje koji URL je formula našla, što pomaže kad
+nešto ne radi.
 
 Kolona `I` je sakrivena grupisanjem. Ne koristi je, jer `J` je prva vidljiva.
 
@@ -124,7 +141,9 @@ Microsoft naloga.
 
 | Simptom | Uzrok |
 |---|---|
+| *Herunterladen* se vidi, a klik ne radi ništa | `HYPERLINK` je unutar `LET`; koristi dve kolone (`Z` i `J`) kao u koracima 2 i 3. Ako ni tada ne radi, kopiraj URL iz `Z` u browser: otvara li se fotografija? |
 | `J7` pokazuje `#BEZUG!` ili `#NAME?` | `BildLink` nije u tabeli `Belege` (korak 1), ili Excel nema `HSTAPELN` (potreban Microsoft 365) |
+| Power Query pokazuje *Spalten: 12* | server još vraća stari kod: u Apps Scriptu **Neue Version**, pa *Vorschau aktualisieren* |
 | Fotografija postoji u aplikaciji, a link nema | Excel nije osvežen (**Daten → Alle aktualisieren**) |
 | Stranica kaže *Dieser Link ist ungültig* | ključ za potpis je promenjen; osveži Excel |
 | Stranica stoji na *Foto wird geladen …* ili javlja *Keine Verbindung* | `API` u `foto.html` nije ista adresa kao `CONFIG.url` u `index.html` |
