@@ -16,10 +16,7 @@
 
 const SHEET_ID   = '1rDi4UQDGc_H1fADmFETAEi1Ef5WN9vboF5Av1W1Phmk';                 // Teil der URL zwischen /d/ und /edit
 const TOKEN_READ = 'HIER_LANGER_ZUFALLSSTRING';        // nur für den CSV-Endpunkt (Excel)
-const PWA_URL    = 'https://dusanmiladinovicvnm.github.io/Spesen/';        // Link im Zugangsmail
-
-// Eigene Web-App-URL, gleich wie CONFIG.url in index.html — für die Foto-Links
-const WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwERKKiXRwXqzgSSX7_XcFp3QImEpw5jc9ZfEqzrCXlHfJ2FOWAE52oZaWieQWF-p6Spw/exec';
+const PWA_URL    = 'https://dusanmiladinovicvnm.github.io/Spesen/';        // Zugangsmail, Foto-Links
 
 const BILD_ORDNER      = '1F7Y7DKMu9s5JEL67w5Ywy7p88vpMRTCM';      // Wurzelordner für Belegfotos
 const BILD_MONATSORDNER = true;   // Unterordner je Periode, z.B. 2026-07
@@ -387,8 +384,8 @@ function doGet(e) {
       .setMimeType(ContentService.MimeType.CSV);
   }
 
-  // Beleg-Foto aus der Excel-Vorlage — der Link aus der Spalte BildLink
-  if (p.format === 'foto') return fotoSeite(p.id, p.sig);
+  // Beleg-Foto für foto.html — der Link aus der Spalte BildLink
+  if (p.format === 'foto') return fotoDaten(p.id, p.sig);
 
   const u = session(p.session);
   if (!u) return out({ ok: false, error: 'session' });
@@ -473,10 +470,18 @@ function aktiveListe(name) {
 
 // ============================================================
 //  Foto-Links für Excel
-//  Spalte J der Vorlage verlinkt auf fotoSeite(). Wer klickt, braucht
-//  weder ein Google-Konto noch etwas Installiertes. Die Signatur
-//  bindet den Link an genau ein Foto — mit einem Link lässt sich
-//  kein anderes öffnen, und es gibt keinen Token im Excel.
+//  Spalte J der Vorlage verlinkt auf foto.html neben der App
+//  (GitHub Pages). Die Seite holt das Foto per fetch bei fotoDaten()
+//  und startet den Download selbst.
+//
+//  Warum nicht direkt eine Apps-Script-Seite: Ist der Browser bei
+//  mehreren Google-Konten angemeldet, schreibt Google /u/N/ in die
+//  Adresse und zeigt "Datei kann derzeit nicht geöffnet werden".
+//  fetch von einer fremden Seite schickt keine Google-Cookies mit —
+//  wie bei der App selbst — und ist davon nicht betroffen.
+//
+//  Die Signatur bindet den Link an genau ein Foto; er enthält
+//  keinen Token und braucht kein Google-Konto.
 // ============================================================
 
 /** Schlüssel für die Signatur. Entsteht beim ersten Aufruf von selbst
@@ -502,44 +507,22 @@ function fotoSignatur(id) {
 function fotoLink(bildUrl) {
   const treffer = String(bildUrl || '').match(/[-\w]{25,}/);
   if (!treffer) return '';
-  return WEBAPP_URL + '?format=foto&id=' + treffer[0] + '&sig=' + fotoSignatur(treffer[0]);
+  return PWA_URL + 'foto.html?id=' + treffer[0] + '&sig=' + fotoSignatur(treffer[0]);
 }
 
-function html(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-}
-
-/** Seite mit Foto und Knopf "Herunterladen". Apps Script kann keine
- *  Binärdatei direkt ausliefern; das Bild steckt daher als data:-URL
- *  in der Seite, der Knopf speichert es mit dem download-Attribut. */
-function fotoSeite(id, sig) {
-  const seite = inhalt => HtmlService
-    .createHtmlOutput(
-      '<!DOCTYPE html><html><head><meta charset="utf-8">' +
-      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-      '<style>' +
-      'body{margin:0;padding:16px;background:#121212;color:#F0F0F0;' +
-      'font-family:-apple-system,"Open Sans",sans-serif;text-align:center}' +
-      'a.knopf{display:inline-block;margin:0 0 16px;padding:12px 28px;border-radius:4px;' +
-      'background:#8FA426;color:#000;font-weight:700;text-decoration:none}' +
-      'img{max-width:100%;max-height:80vh;border:1px solid #464646;border-radius:4px}' +
-      'p{font-size:12px;color:#969696}' +
-      '</style></head><body>' + inhalt + '</body></html>')
-    .setTitle('Beleg-Foto');
-
+/** Foto als Base64 mit Dateinamen, nur mit gültiger Signatur. */
+function fotoDaten(id, sig) {
   id  = String(id  || '');
   sig = String(sig || '');
   if (!/^[-\w]{25,}$/.test(id) || sig !== fotoSignatur(id)) {
-    return seite('<p>Dieser Link ist ungültig. Bitte Excel aktualisieren ' +
-                 '(Daten → Alle aktualisieren) und erneut klicken.</p>');
+    return out({ ok: false, error: 'ungültig' });
   }
 
   let datei;
   try {
     datei = DriveApp.getFileById(id);
   } catch (err) {
-    return seite('<p>Das Foto ist in Drive nicht mehr vorhanden.</p>');
+    return out({ ok: false, error: 'fehlt' });
   }
 
   // Ablage: Belegfotos / Person / 2026-08 / Datei — Person in den Dateinamen
@@ -550,18 +533,15 @@ function fotoSeite(id, sig) {
     if (ordner.getId() !== BILD_ORDNER) person = ordner.getName();
   } catch (err) { /* nur Kosmetik für den Dateinamen */ }
 
-  const name = ((person ? person + ' ' : '') + datei.getName())
-    .replace(/[\/\\:*?"<>|]/g, '');
   const blob = datei.getBlob();
-  const daten = 'data:' + (blob.getContentType() || 'image/jpeg') + ';base64,' +
-                Utilities.base64Encode(blob.getBytes());
-
-  return seite(
-    '<a class="knopf" href="' + daten + '" download="' + html(name) + '">Herunterladen</a>' +
-    '<div><img src="' + daten + '" alt="Beleg-Foto"></div>' +
-    '<p>' + html(name) + '<br>Startet der Download nicht, das Bild mit der rechten ' +
-    'Maustaste sichern oder direkt in einen Finder-Ordner ziehen.</p>');
+  return out({
+    ok:   true,
+    name: ((person ? person + ' ' : '') + datei.getName()).replace(/[\/\\:*?"<>|]/g, ''),
+    typ:  blob.getContentType() || 'image/jpeg',
+    bild: Utilities.base64Encode(blob.getBytes())
+  });
 }
+
 
 // ============================================================
 //  Schreiben

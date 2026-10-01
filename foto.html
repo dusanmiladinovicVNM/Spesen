@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Beleg-Foto</title>
+<style>
+:root{
+  --bg:#121212;
+  --text:#F0F0F0;
+  --grau:#969696;
+  --rand:#464646;
+  --akzent:#8FA426;
+}
+body{
+  margin:0;padding:24px 16px;
+  background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Open Sans",sans-serif;
+  text-align:center;
+}
+.knopf{
+  display:inline-block;margin:0 0 16px;padding:12px 28px;border-radius:4px;
+  background:var(--akzent);color:#000;font-weight:700;text-decoration:none;
+}
+.knopf[hidden],img[hidden]{display:none}
+img{max-width:100%;max-height:78vh;border:1px solid var(--rand);border-radius:4px}
+p{font-size:13px;color:var(--grau);margin:12px 0 0}
+</style>
+</head>
+<body>
+
+<a class="knopf" id="knopf" hidden>Herunterladen</a>
+<div><img id="bild" alt="Beleg-Foto" hidden></div>
+<p id="text">Foto wird geladen …</p>
+
+<script>
+/* Beleg-Foto aus der Excel-Vorlage — Spalte J verlinkt hierher
+   (BildLink im CSV). Die Seite holt das Foto bei Apps Script und
+   startet den Download selbst.
+
+   Sie liegt bewusst hier und nicht in Apps Script: fetch schickt keine
+   Google-Cookies mit, deshalb stört es nicht, wenn der Browser bei
+   mehreren Google-Konten angemeldet ist (/u/N/-Fehler). */
+
+// gleich wie CONFIG.url in index.html
+const API = 'https://script.google.com/macros/s/AKfycbwERKKiXRwXqzgSSX7_XcFp3QImEpw5jc9ZfEqzrCXlHfJ2FOWAE52oZaWieQWF-p6Spw/exec';
+
+const $ = id => document.getElementById(id);
+
+async function laden() {
+  const q = new URLSearchParams(location.search);
+  const params = new URLSearchParams({
+    format: 'foto', id: q.get('id') || '', sig: q.get('sig') || ''
+  });
+
+  let r;
+  try {
+    r = await (await fetch(API + '?' + params.toString())).json();
+  } catch (e) {
+    $('text').textContent = 'Keine Verbindung. Bitte später erneut versuchen.';
+    return;
+  }
+
+  if (!r.ok) {
+    $('text').textContent = {
+      'ungültig': 'Dieser Link ist ungültig. Bitte Excel aktualisieren '
+                + '(Daten → Alle aktualisieren) und erneut klicken.',
+      'fehlt':    'Das Foto ist in Drive nicht mehr vorhanden.'
+    }[r.error] || 'Foto nicht verfügbar: ' + r.error;
+    return;
+  }
+
+  const bytes = Uint8Array.from(atob(r.bild), c => c.charCodeAt(0));
+  const url   = URL.createObjectURL(new Blob([bytes], { type: r.typ || 'image/jpeg' }));
+
+  $('bild').src = url;
+  $('bild').hidden = false;
+  $('knopf').href = url;
+  $('knopf').download = r.name;
+  $('knopf').hidden = false;
+  $('text').textContent = r.name;
+  document.title = r.name;
+
+  // Download sofort; der Knopf bleibt für den Fall, dass der Browser
+  // den automatischen Download nicht zulässt.
+  $('knopf').click();
+}
+
+laden();
+</script>
+</body>
+</html>

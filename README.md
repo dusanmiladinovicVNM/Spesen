@@ -22,6 +22,7 @@ apps-script/
 
 pwa/
   index.html                 CIJELA aplikacija: CSS, HTML, logika, konfiguracija, logo
+  foto.html                  preuzimanje fotografije iz Excela (link u koloni J)
   manifest.webmanifest       ime i ikone za dodavanje na home screen
   icons/icon-192.png         ← zamijeni
   icons/icon-512.png         ← zamijeni
@@ -39,7 +40,7 @@ Sve što se mijenja nalazi se u `index.html`, u tri označena bloka na vrhu:
 |---|---|
 | `:root` u `<style>` | boje; akcentna zelena je `#8FA426` |
 | `<symbol id="logo">` | logotip — zamijeni sadržaj svojim SVG-om |
-| `const CONFIG` | Web-App-URL iz Apps Scripta |
+| `const CONFIG` | Web-App-URL iz Apps Scripta; ista adresa stoji i u `foto.html` (`const API`) |
 
 **Bez service workera.** Aplikacija ionako traži mrežu za svaku radnju,
 pa cache donosi samo problem zastarjele verzije. Bez njega izmjena je
@@ -200,9 +201,9 @@ tada link iz kolone `BildUrl` radi bez prijave. Cena je da svako ko dobije
 link vidi taj račun.
 
 **Excel.** U koloni **J**, desno od tabele, svaki red sa fotografijom ima
-link **Herunterladen**. Link vodi na stranicu Apps Scripta sa tom fotografijom
-i dugmetom za preuzimanje. Potpisan je, pa otvara samo tu jednu fotografiju,
-bez tokena i bez Google naloga. Šablon se ne dira, samo se proširuje udesno.
+link **Herunterladen**. Link vodi na `foto.html` pored aplikacije, koja
+fotografiju odmah snima u Downloads. Potpisan je, pa otvara samo tu jednu
+fotografiju, bez tokena i bez Google naloga. Šablon se ne dira, samo se proširuje udesno.
 Postavljanje je u `Excel.md`, odeljak 4.
 
 **Storno ne briše sliku.** Storniranje je povratno, pa fajl ostaje.
@@ -327,10 +328,10 @@ pa pokreni `zugangVerschicken` ponovo.
 | 29 | Izmena Bezeichnung | stari belezi zadržavaju staru `KontoBez` |
 | 30 | Deaktivacija konta | nestaje iz izbora, stari belezi i Excel nepromenjeni |
 | 31 | Deaktivacija `KmKonto` / poslednje Kostenstelle | odbijeno |
-| 32 | Excel: klik na *Herunterladen* | stranica sa fotografijom; dugme snima `Ime JJJJ-MM-DD_iznos_nr.jpg` |
+| 32 | Excel: klik na *Herunterladen* | browser se otvori, `Ime JJJJ-MM-DD_iznos_nr.jpg` odmah u Downloads |
 | 33 | Excel: red bez fotografije | kolona J prazna |
 | 34 | Link sa izmenjenim `id` ili `sig` | *Dieser Link ist ungültig* |
-| 35 | Link otvoren u privatnom prozoru, bez Google prijave | fotografija se prikazuje |
+| 35 | Link u browseru prijavljenom na više Google naloga | radi isto kao u privatnom prozoru |
 
 Test 1 zaključava nalog na 15 minuta — radi ga sa testnim nalogom.
 

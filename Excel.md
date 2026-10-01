@@ -7,7 +7,7 @@ ulaze u skriveni list `Daten`, a šablon ih dohvata formulom.
 
 ```
 Apps Script ─CSV─▶ Power Query (tabela Belege, list Daten) ─FILTER─▶ Vorlage B7:G31 i J7:J31
-klik na J ─▶ browser ─▶ Apps Script stranica sa fotografijom ─▶ Herunterladen
+klik na J ─▶ foto.html (GitHub Pages) ─fetch─▶ Apps Script ─▶ download u Downloads
 ```
 
 ---
@@ -67,16 +67,22 @@ greškom `#ÜBERLAUF!`. Odspoji ih pre svega ostalog.
 ## 4. Kolona Foto
 
 U koloni **J**, desno od tabele, svaki red sa fotografijom dobija link
-**Herunterladen**. Klik otvara stranicu sa fotografijom i dugmetom
-**Herunterladen**, koje je snima kao `Jovica Miladinovic 2026-08-04_100.50_R1123.jpg`.
+**Herunterladen**. Klik otvara browser, a fotografija se odmah snima u
+Downloads kao `Jovica Miladinovic 2026-08-04_100.50_R1123.jpg`. Ista stranica
+je i prikazuje, uz dugme za ponovni pokušaj.
 
-Nema makroa i ništa se ne instalira. Radi na Macu, Windowsu i u Excel for
-Web, i za ljude bez Google naloga.
+Nema makroa i ništa se ne instalira. Radi na Macu i Windowsu, za ljude bez
+Google naloga i u browseru koji je prijavljen na više Google naloga.
 
 ### Kako radi
 
 - **CSV sadrži kolonu `BildLink`.** Apps Script je računa pri svakom
-  osvežavanju, ne stoji u tabeli.
+  osvežavanju, ne stoji u tabeli. Link vodi na `foto.html` pored aplikacije
+  (GitHub Pages), a ta stranica fotografiju preuzima od Apps Scripta.
+- **Zašto ne direktno Apps Script stranica:** ako je browser prijavljen na
+  više Google naloga, Google ubaci `/u/N/` u adresu i prikaže *Datei kann
+  derzeit nicht geöffnet werden*. `foto.html` zahtev šalje bez Google
+  kolačića, kao i aplikacija, pa je to ne pogađa.
 - **Link je potpisan.** Otvara samo tu jednu fotografiju i ne sadrži
   `TOKEN_READ`. Ključ za potpis Apps Script sam napravi u Script Properties
   (`FOTO_SCHLUESSEL`). Ako ga obrišeš, svi stari linkovi prestaju da važe, a
@@ -121,7 +127,8 @@ Microsoft naloga.
 | `J7` pokazuje `#BEZUG!` ili `#NAME?` | `BildLink` nije u tabeli `Belege` (korak 1), ili Excel nema `HSTAPELN` (potreban Microsoft 365) |
 | Fotografija postoji u aplikaciji, a link nema | Excel nije osvežen (**Daten → Alle aktualisieren**) |
 | Stranica kaže *Dieser Link ist ungültig* | ključ za potpis je promenjen; osveži Excel |
-| Dugme ne pokreće download | browser blokira download sa Apps Script stranice; desni klik na sliku → *Bild sichern unter*, ili prevuci sliku u Finder |
+| Stranica stoji na *Foto wird geladen …* ili javlja *Keine Verbindung* | `API` u `foto.html` nije ista adresa kao `CONFIG.url` u `index.html` |
+| Fotografija se prikaže, ali nema downloada | browser je blokirao automatski download; klikni **Herunterladen** na stranici |
 
 ---
 
