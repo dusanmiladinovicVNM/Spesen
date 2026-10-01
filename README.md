@@ -200,7 +200,7 @@ Ako knjigovodstvo nema Google nalog, postavi `BILD_OEFFENTLICH = true` —
 tada link iz kolone `BildUrl` radi bez prijave. Cena je da svako ko dobije
 link vidi taj račun.
 
-**Excel.** U koloni **J**, desno od tabele, svaki red sa fotografijom ima
+**Excel.** U koloni **K**, desno od tabele, svaki red sa fotografijom ima
 link **Herunterladen**. Link vodi na `foto.html` pored aplikacije, koja
 fotografiju odmah snima u Downloads. Potpisan je, pa otvara samo tu jednu
 fotografiju, bez tokena i bez Google naloga. Šablon se ne dira, samo se proširuje udesno.
@@ -215,8 +215,9 @@ U formularu je prekidač **Beleg / Fahrt**. Kod vožnje korisnik unosi samo
 datum, broj kilometara i kostenstelle; iznos se računa kao `km × KmSatz`.
 
 Red završava u istom listu `Belege` sa `Art = Fahrt`, `MwstSatz = 0`
-i `Bemerkung` u obliku `120 km à 0.70 — Zürich–Bern`. Excel šablon se
-ne menja: vožnja je za njega običan red.
+i `Bemerkung` u obliku `120 km à 0.70 — Zürich–Bern`. U Excel šablonu
+kolona **KM** (`G`) pokazuje kilometre, a red Total njihov zbir
+(`Excel.md`, odeljak 3).
 
 **Jedan unos po osobi i danu.** Ponovni unos za isti datum ne pravi drugi
 red nego nudi zamenu postojećeg. Ključ je `email|datum|fahrt`.

@@ -905,6 +905,16 @@ function vorschau() {
 
 /* ---------- snimanje ---------- */
 
+/* Fehlercodes des Servers (beleg/fahrt) in Klartext */
+const FEHLER_TEXT = {
+  betrag:  'Betrag fehlt oder ist ungültig.',
+  konto:   'Konto und Kostenstelle sind erforderlich.',
+  datum:   'Datum fehlt oder ist ungültig.',
+  periode: 'Monat und Jahr sind erforderlich.',
+  mwst:    'MWSt-Satz fehlt oder ist ungültig.',
+  km:      'Kilometer fehlen.'
+};
+
 async function speichern(ersetzen) {
   if (S.laeuft) return;
   if (S.art === 'fahrt') return speichernFahrt(ersetzen);
@@ -915,6 +925,10 @@ async function speichern(ersetzen) {
     toast('Konto und Kostenstelle sind erforderlich.', 'err'); return;
   }
   if (!$('fm-datum').value) { toast('Datum fehlt.', 'err'); return; }
+  if (!$('fm-monat').value || !$('fm-jahr').value) {
+    toast('Monat und Jahr sind erforderlich.', 'err'); return;
+  }
+  if ($('fm-mwst').value === '') { toast('MWSt-Satz ist erforderlich.', 'err'); return; }
 
   const kontoOpt = $('fm-konto').selectedOptions[0].textContent;
   const kstOpt   = $('fm-kst').selectedOptions[0].textContent;
@@ -952,7 +966,7 @@ async function speichern(ersetzen) {
     } else if (r.error === 'duplikat') {
       $('dlg-dup').classList.add('zeigen');
     } else {
-      toast('Speichern nicht möglich: ' + (r.error || 'unbekannt'), 'err');
+      toast(FEHLER_TEXT[r.error] || 'Speichern nicht möglich: ' + (r.error || 'unbekannt'), 'err');
     }
   } catch (e) {
     toast('Keine Verbindung. Der Beleg wurde nicht gespeichert.', 'err');
@@ -967,6 +981,9 @@ async function speichernFahrt(ersetzen) {
   const km = zahl($('fm-km').value);
   if (!km || km <= 0)      { toast('Kilometer fehlen.', 'err'); return; }
   if (!$('fm-datum').value) { toast('Datum fehlt.', 'err'); return; }
+  if (!$('fm-monat').value || !$('fm-jahr').value) {
+    toast('Monat und Jahr sind erforderlich.', 'err'); return;
+  }
   if (!$('fm-kst').value)   { toast('Kostenstelle ist erforderlich.', 'err'); return; }
 
   const kstOpt = $('fm-kst').selectedOptions[0].textContent;
@@ -1004,6 +1021,7 @@ async function speichernFahrt(ersetzen) {
       $('dlg-fahrt').classList.add('zeigen');
     } else {
       toast({
+        ...FEHLER_TEXT,
         kmsatz:  'Für dieses Datum ist kein Kilometeransatz hinterlegt.',
         kmkonto: 'Kein Konto für Kilometerkosten hinterlegt.'
       }[r.error] || 'Speichern nicht möglich: ' + (r.error || 'unbekannt'), 'err');
