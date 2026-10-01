@@ -91,10 +91,13 @@ Web, i za ljude bez Google naloga.
 
 ### Postavljanje, jednom za fajl
 
-1. **`BildLink` u Power Query.** Korak *Andere entfernte Spalten* nabraja
-   kolone poimence. Otvori **Daten → Daten abrufen → Power Query-Editor starten**,
-   upit `Belege`, klikni na taj korak i u formuli dodaj `"BildLink"` na kraj
-   liste. Posle **Schließen & laden** tabela `Belege` ima kolonu `BildLink`.
+1. **`BildLink` u Power Query.** Otvori **Daten → Daten abrufen → Power
+   Query-Editor starten**, upit `Belege`.
+   - Korak *Quelle*: ako formula sadrži `Columns=12`, promeni u `Columns=13`.
+     Inače Power Query tiho odseca novu, 13. kolonu.
+   - Korak *Andere entfernte Spalten* nabraja kolone poimence. Dodaj
+     `"BildLink"` na kraj liste.
+   - **Schließen & laden.** Tabela `Belege` sada ima kolonu `BildLink`.
 2. U `J5` upiši `Foto`.
 3. U `J7` upiši formulu ispod i kopiraj je do `J31`.
 4. Sačuvaj i otpremi na SharePoint.
