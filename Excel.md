@@ -97,13 +97,17 @@ Google naloga i u browseru koji je prijavljen na više Google naloga.
 
 ### Postavljanje, jednom za fajl
 
-1. **`BildLink` u Power Query.** Otvori **Daten → Daten abrufen → Power
-   Query-Editor starten**, upit `Belege`.
-   - Korak *Quelle*: ako formula sadrži `Columns=12`, promeni u `Columns=13`.
-     Inače Power Query tiho odseca novu, 13. kolonu.
-   - Korak *Andere entfernte Spalten* nabraja kolone poimence. Dodaj
-     `"BildLink"` na kraj liste.
-   - **Schließen & laden.** Tabela `Belege` sada ima kolonu `BildLink`.
+1. **`BildLink` u Power Query.** Prvo objavi novi `Code.gs` kao novu verziju.
+   Zatim **Daten → Daten abrufen → Power Query-Editor starten**, upit `Belege`,
+   **Aktualisieren → Vorschau aktualisieren**. Dole treba da piše
+   *Spalten: 13*, a poslednja kolona je `BildLink`.
+   - Ako upit ima samo korake *Quelle → Kopf → Typen*, ne menjaj ništa.
+     Nova kolona ulazi sama.
+   - Ako formula u koraku *Quelle* sadrži `Columns=12`, promeni u `Columns=13`.
+     Inače Power Query tiho odseca 13. kolonu.
+   - Ako postoji korak *Andere entfernte Spalten*, dodaj `"BildLink"` na kraj
+     liste.
+   - **Schließen & laden.**
 2. U `J5` upiši `Foto`.
 3. U `J7` upiši formulu ispod i kopiraj je do `J31`.
 4. Sačuvaj i otpremi na SharePoint.
@@ -125,6 +129,7 @@ Microsoft naloga.
 | Simptom | Uzrok |
 |---|---|
 | `J7` pokazuje `#BEZUG!` ili `#NAME?` | `BildLink` nije u tabeli `Belege` (korak 1), ili Excel nema `HSTAPELN` (potreban Microsoft 365) |
+| Power Query pokazuje *Spalten: 12* | server još vraća stari kod: u Apps Scriptu **Neue Version**, pa *Vorschau aktualisieren* |
 | Fotografija postoji u aplikaciji, a link nema | Excel nije osvežen (**Daten → Alle aktualisieren**) |
 | Stranica kaže *Dieser Link ist ungültig* | ključ za potpis je promenjen; osveži Excel |
 | Stranica stoji na *Foto wird geladen …* ili javlja *Keine Verbindung* | `API` u `foto.html` nije ista adresa kao `CONFIG.url` u `index.html` |
