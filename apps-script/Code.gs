@@ -98,6 +98,39 @@ function hashPass(pw, salt) {
   return h;
 }
 
+/** Freitext für Sheets. Beginnt ein Wert mit = + - oder @, liest Sheets
+ *  ihn als Formel — eine Formel in "Belege" könnte andere Blätter
+ *  auslesen, bis zu den Passwort-Hashes. Das vorangestellte Apostroph
+ *  erzwingt Text; Sheets zeigt es nicht an. */
+function alsText(v) {
+  const s = String(v == null ? '' : v);
+  return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
+/** Zeilennummer eines eigenen, nicht stornierten Belegs, oder 0.
+ *  Gesucht wird über den DedupKey: er ist unter den aktiven Belegen
+ *  eindeutig und bleibt gleich, wenn jemand die Tabelle sortiert oder
+ *  Zeilen löscht. Die Zeilennummer gilt nur noch als Rückfall für
+ *  Zeilen ohne Schlüssel und für eine noch geöffnete alte App. */
+function belegZeile(rows, head, u, key, zeile) {
+  const iEml = head.indexOf('Email');
+  const iKey = head.indexOf('DedupKey');
+  const iSto = head.indexOf('Storniert');
+  const eigen = r => !!r &&
+    String(r[iEml]).trim().toLowerCase() === String(u.email).trim().toLowerCase() &&
+    String(r[iSto]).toLowerCase() !== 'true';
+
+  key = String(key || '').trim();
+  if (key && iKey >= 0) {
+    for (let i = 1; i < rows.length; i++) {
+      if (String(rows[i][iKey]).trim() === key && eigen(rows[i])) return i + 1;
+    }
+    return 0;
+  }
+  const z = Number(zeile);
+  return z >= 2 && eigen(rows[z - 1]) ? z : 0;
+}
+
 /** Zaglavlja iz tabele stižu ponekad sa razmakom na kraju.
  *  Bez trimovanja indexOf vrati -1 i poređenja tiho promaše. */
 function kopf(rows) {
@@ -402,22 +435,15 @@ function doGet(e) {
   // Bild einer eigenen Zeile — geht bewusst über den Server,
   // damit Mitarbeitende keinen Drive-Zugriff brauchen.
   if (p.action === 'bild') {
-    const sh     = sheet('Belege');
-    const zeile  = Number(p.zeile);
-    const breite = sh.getLastColumn();
-    if (!zeile || zeile < 2) return out({ ok: false, error: 'zeile fehlt' });
-
-    const head = kopf(sh.getRange(1, 1, 1, breite).getValues());
-    const iEml = head.indexOf('Email');
+    const rows = sheet('Belege').getDataRange().getValues();
+    const head = kopf(rows);
     const iBld = head.indexOf('BildUrl');
-    if (iEml < 0 || iBld < 0) return out({ ok: false, error: 'Spalte fehlt' });
+    if (head.indexOf('Email') < 0 || iBld < 0) return out({ ok: false, error: 'Spalte fehlt' });
 
-    const row = sh.getRange(zeile, 1, 1, breite).getValues()[0];
-    if (String(row[iEml]).trim().toLowerCase() !== String(u.email).trim().toLowerCase()) {
-      return out({ ok: false, error: 'fremder Beleg' });
-    }
+    const zeile = belegZeile(rows, head, u, p.key, p.zeile);
+    if (!zeile) return out({ ok: false, error: 'nicht gefunden' });
 
-    const treffer = String(row[iBld] || '').match(/[-\w]{25,}/);
+    const treffer = String(rows[zeile - 1][iBld] || '').match(/[-\w]{25,}/);
     if (!treffer) return out({ ok: false, error: 'kein Bild' });
 
     try {
@@ -435,8 +461,8 @@ function doGet(e) {
     rows.shift();
     const ix = n => head.indexOf(n);
 
-    // _zeile = stvarni broj reda u tabeli; storno ide po njemu,
-    // pa ne zavisi od toga kako je kolona DedupKey nazvana
+    // _zeile = broj reda u trenutku čitanja. Storno i foto idu po
+    // DedupKey (belegZeile), a _zeile je samo rezerva za redove bez ključa
     const iDat = head.indexOf('Datum');
     const alle = rows.map((r, i) => {
       const o = { _zeile: i + 2 };
@@ -465,6 +491,12 @@ function aktiveListe(name) {
                  String(r[2]).toLowerCase() === 'true')
     .sort((a, b) => (Number(a[3]) || 0) - (Number(b[3]) || 0))
     .map(r => ({ nr: String(r[0]).trim(), bez: String(r[1]).trim() }));
+}
+
+/** Aktiver Eintrag aus Konten oder Kostenstellen, sonst null. */
+function stammEintrag(liste, nr) {
+  nr = String(nr == null ? '' : nr).trim();
+  return aktiveListe(liste).filter(x => x.nr === nr)[0] || null;
 }
 
 
@@ -612,6 +644,12 @@ function beleg(b, u) {
   if (String(b.bemerkung || '').trim() === '')        return out({ ok: false, error: 'bemerkung' });
   // ohne "base64," würde bildSpeichern() still nichts speichern
   if (String(b.bild || '').indexOf('base64,') < 0)    return out({ ok: false, error: 'foto' });
+
+  // Konto und Kostenstelle müssen aktiv sein; die Bezeichnung kommt aus
+  // den Stammdaten, nicht aus der Anfrage
+  const konto = stammEintrag('Konten', b.kontoNr);
+  const kst   = stammEintrag('Kostenstellen', b.kstNr);
+  if (!konto || !kst) return out({ ok: false, error: 'stamm' });
   const mwst  = round2(brutto - brutto / (1 + satz / 100));
   const netto = round2(brutto - mwst);
 
@@ -639,9 +677,9 @@ function beleg(b, u) {
 
   sh.appendRow([
     new Date(),                 // Zeitstempel
-    u.name,                     // Mitarbeiter  ← aus der Sitzung
+    alsText(u.name),            // Mitarbeiter  ← aus der Sitzung
     u.email,                    // Email        ← aus der Sitzung
-    b.belegNr || '',
+    alsText(b.belegNr || ''),
     String(b.datum),            // yyyy-mm-dd als Text, keine Zeitzone
     Number(b.monat),
     Number(b.jahr),
@@ -649,11 +687,11 @@ function beleg(b, u) {
     satz / 100,                 // 0.081 — Excel-Prozentformat erwartet das so
     mwst,
     netto,
-    String(b.kontoNr),
-    String(b.kontoBez || ''),
-    String(b.kstNr),
-    String(b.kstBez || ''),
-    String(b.bemerkung || ''),
+    alsText(konto.nr),
+    alsText(konto.bez),
+    alsText(kst.nr),
+    alsText(kst.bez),
+    alsText(b.bemerkung),
     key,
     false,
     'Beleg',
@@ -675,6 +713,8 @@ function fahrt(b, u) {
   if (fehler)         return out({ ok: false, error: fehler });
   if (!b.kstNr)       return out({ ok: false, error: 'konto' });
   if (String(b.bemerkung || '').trim() === '') return out({ ok: false, error: 'zweck' });
+  const kst = stammEintrag('Kostenstellen', b.kstNr);
+  if (!kst)           return out({ ok: false, error: 'stamm' });
 
   const satz = Number(parameter('KmSatz', b.datum));
   if (!satz) return out({ ok: false, error: 'kmsatz' });
@@ -712,12 +752,12 @@ function fahrt(b, u) {
                (b.bemerkung ? ' — ' + String(b.bemerkung) : '');
 
   const zeile = [
-    new Date(), u.name, u.email, '',
+    new Date(), alsText(u.name), u.email, '',
     String(b.datum), Number(b.monat), Number(b.jahr),
     brutto, 0, 0, brutto,
-    kontoNr, kontoBez,
-    String(b.kstNr), String(b.kstBez || ''),
-    text, key, false,
+    alsText(kontoNr), alsText(kontoBez),
+    alsText(kst.nr), alsText(kst.bez),
+    alsText(text), key, false,
     'Fahrt', km, satz, ''
   ];
 
@@ -732,26 +772,18 @@ function fahrt(b, u) {
 
 
 function storno(b, u) {
-  const sh    = sheet('Belege');
-  const zeile = Number(b.zeile);
+  const sh   = sheet('Belege');
+  const rows = sh.getDataRange().getValues();
+  const head = kopf(rows);
+  const iSto = head.indexOf('Storniert');
 
-  if (!zeile || zeile < 2) return out({ ok: false, error: 'zeile fehlt' });
-
-  const breite = sh.getLastColumn();
-  const head   = kopf(sh.getRange(1, 1, 1, breite).getValues());
-  const iSto   = head.indexOf('Storniert');
-  const iEml   = head.indexOf('Email');
-
-  if (iSto < 0 || iEml < 0) {
+  if (iSto < 0 || head.indexOf('Email') < 0) {
     return out({ ok: false,
       error: 'Spalte fehlt. Gefundene Kopfzeile: ' + head.join(' | ') });
   }
 
-  const row = sh.getRange(zeile, 1, 1, breite).getValues()[0];
-
-  if (String(row[iEml]).trim().toLowerCase() !== String(u.email).trim().toLowerCase()) {
-    return out({ ok: false, error: 'fremder Beleg' });
-  }
+  const zeile = belegZeile(rows, head, u, b.key, b.zeile);
+  if (!zeile) return out({ ok: false, error: 'nicht gefunden' });
 
   sh.getRange(zeile, iSto + 1).setValue(true);
   return out({ ok: true });
@@ -941,14 +973,14 @@ function adminNeu(b) {
   const email = String(b.email || '').trim().toLowerCase();
   const name  = String(b.name  || '').trim();
 
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+  if (!/^[^@\s=+\-][^@\s]*@[^@\s]+\.[^@\s]+$/.test(email)) {
     return out({ ok: false, error: 'ungültige Mailadresse' });
   }
   if (!name) return out({ ok: false, error: 'Name fehlt' });
   if (benutzerZeile(email)) return out({ ok: false, error: 'existiert bereits' });
 
   const sh = sheet('Benutzer');
-  sh.appendRow([email, name, '', '', true, 0, '', '']);
+  sh.appendRow([email, alsText(name), '', '', true, 0, '', '']);
   const zeile = sh.getLastRow();
 
   const mailSchicken = b.mail !== false;

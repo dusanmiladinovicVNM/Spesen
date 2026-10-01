@@ -30,6 +30,11 @@ pwa/
 excel/
   vorlage.png                izgled lista Vorlage (kolone A–H, J slobodna)
 
+tests/
+  gas.js                     nadomestak za Apps Script servise (Sheets, Drive …)
+  code.test.js               testovi za Code.gs
+  seiten.test.js             skripte u index.html i foto.html se kompajliraju
+
 README.md                    ovaj fajl
 Excel.md                     povezivanje šablona, kolona Foto, SharePoint
 ```
@@ -292,6 +297,28 @@ pa pokreni `zugangVerschicken` ponovo.
 **Odjava uređaja:** obriši red u `Sessions`.
 
 ---
+
+## Automatski testovi
+
+```
+node --test tests/*.test.js
+```
+
+Bez instalacije, potreban je samo Node 22. `tests/gas.js` učitava
+**nepromenjen** `Code.gs` sa tabelama u memoriji, pa testovi pokrivaju isti
+kod koji ide u Apps Script. GitHub ih pokreće sam na svakom PR-u
+(`.github/workflows/tests.yml`).
+
+Pokrivaju:
+- obavezna polja
+- proveru konta i KST
+- zaštitu od formula
+- storno i fotografiju po ključu
+- upravljanje kontima i KST
+- linkove za fotografije u Excelu
+
+Ručni scenariji ispod i dalje važe za ono što testovi ne vide: kameru,
+mejl i Excel.
 
 ## Test pre predaje
 

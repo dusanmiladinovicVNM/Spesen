@@ -631,7 +631,7 @@ function esc(s) {
 
 /** Trennstrich blasser setzen als den Inhalt. */
 function strich(text) {
-  return String(text).split(' | ')
+  return String(text).split(' | ').map(esc)
     .join('<span class="trenn">|</span>');
 }
 
@@ -707,6 +707,7 @@ async function anmelden() {
       localStorage.setItem('session', r.session);
       localStorage.setItem('name', r.name);
       localStorage.setItem('rolle', S.rolle);
+      localStorage.setItem('email', r.email || email);
       $('lg-pass').value = '';
       if (r.pwGeaendert === false) { zeigePasswort(true); return; }
       await start();
@@ -764,9 +765,10 @@ async function passwortSpeichern() {
     const r = await post({ session: S.session, action: 'passwort', alt, neu });
     if (r.ok) {
       // Serverseitig sind alle Sitzungen beendet — neu anmelden
+      const email = localStorage.getItem('email');
       localStorage.clear();
       S.session = ''; S.altPass = '';
-      $('lg-email').value = localStorage.getItem('email') || $('lg-email').value;
+      $('lg-email').value = email || $('lg-email').value;
       zeigeScreen('scr-login');
       toast('Passwort geändert. Bitte neu anmelden.', 'ok');
     } else {
@@ -807,11 +809,27 @@ function fuelleMonatJahr() {
   $('fm-jahr').value = j;
 }
 
+/** Baut Konto und Kostenstelle neu auf. Die Auswahl bleibt stehen,
+ *  solange der Eintrag noch aktiv ist, sonst "– wählen –". */
 function fuelleStammdaten() {
   const opt = a => a
     .map(x => `<option value="${esc(x.nr)}">${esc(x.nr)} · ${esc(x.bez)}</option>`).join('');
-  $('fm-konto').innerHTML = '<option value="">– wählen –</option>' + opt(S.konten);
-  $('fm-kst').innerHTML   = '<option value="">– wählen –</option>' + opt(S.kst);
+  ['fm-konto', 'fm-kst'].forEach((id, i) => {
+    const el = $(id), alt = el.value;
+    el.innerHTML = '<option value="">– wählen –</option>' + opt(i ? S.kst : S.konten);
+    el.value = alt;
+    if (el.selectedIndex < 0) el.value = '';
+  });
+}
+
+/** Aktuelle Listen vom Server; true, wenn geladen. */
+async function stammdatenLaden() {
+  const r = await get({ action: 'stammdaten' });
+  if (!r.ok) { if (r.error === 'session') sessionWeg(); return false; }
+  S.konten = r.konten; S.kst = r.kostenstellen; S.kmSaetze = r.kmSaetze || [];
+  localStorage.setItem('stammdaten', JSON.stringify(r));
+  fuelleStammdaten();
+  return true;
 }
 
 /* ---------- Foto ---------- */
@@ -915,6 +933,7 @@ const FEHLER_TEXT = {
   foto:    'Beleg-Foto ist erforderlich.',
   bemerkung: 'Bemerkung ist erforderlich.',
   zweck:   'Strecke / Zweck ist erforderlich.',
+  stamm:   'Konto oder Kostenstelle ist nicht mehr aktiv. Die Liste wurde aktualisiert — bitte neu wählen.',
   km:      'Kilometer fehlen.'
 };
 
@@ -970,6 +989,9 @@ async function speichern(ersetzen) {
       sessionWeg();
     } else if (r.error === 'duplikat') {
       $('dlg-dup').classList.add('zeigen');
+    } else if (r.error === 'stamm') {
+      toast(FEHLER_TEXT.stamm, 'err');
+      stammdatenLaden().catch(() => {});
     } else {
       toast(FEHLER_TEXT[r.error] || 'Speichern nicht möglich: ' + (r.error || 'unbekannt'), 'err');
     }
@@ -1025,6 +1047,9 @@ async function speichernFahrt(ersetzen) {
         'Für dieses Datum sind bereits ' + r.km + ' km erfasst. ' +
         'Möchten Sie den Eintrag durch ' + km + ' km ersetzen?';
       $('dlg-fahrt').classList.add('zeigen');
+    } else if (r.error === 'stamm') {
+      toast(FEHLER_TEXT.stamm, 'err');
+      stammdatenLaden().catch(() => {});
     } else {
       toast({
         ...FEHLER_TEXT,
@@ -1129,7 +1154,7 @@ async function bildZeigen(i) {
   $('dlg-bild').classList.add('zeigen');
 
   try {
-    const r = await get({ action: 'bild', zeile: beleg._zeile });
+    const r = await get({ action: 'bild', key: beleg.DedupKey || '', zeile: beleg._zeile });
     if (r.ok) {
       $('bild-gross').src = r.bild;
       $('bild-gross').hidden = false;
@@ -1138,7 +1163,9 @@ async function bildZeigen(i) {
       $('dlg-bild').classList.remove('zeigen');
       sessionWeg();
     } else {
-      $('bild-laedt').textContent = 'Bild nicht verfügbar: ' + (r.error || 'unbekannt');
+      $('bild-laedt').textContent = r.error === 'nicht gefunden'
+        ? 'Beleg nicht gefunden. Bitte die Liste neu laden.'
+        : 'Bild nicht verfügbar: ' + (r.error || 'unbekannt');
     }
   } catch (e) {
     $('bild-laedt').textContent = 'Keine Verbindung.';
@@ -1159,7 +1186,7 @@ async function stornoKlick(i, btn) {
   const beleg = S.belege[i];
   try {
     const r = await post({
-      session: S.session, action: 'storno', zeile: beleg._zeile
+      session: S.session, action: 'storno', key: beleg.DedupKey || '', zeile: beleg._zeile
     });
     if (r.ok) {
       S.belege.splice(i, 1);
@@ -1169,7 +1196,9 @@ async function stornoKlick(i, btn) {
     } else if (r.error === 'session') {
       sessionWeg();
     } else {
-      toast('Stornieren nicht möglich: ' + (r.error || 'unbekannt'), 'err');
+      toast(r.error === 'nicht gefunden'
+        ? 'Beleg nicht gefunden — schon storniert? Bitte die Liste neu laden.'
+        : 'Stornieren nicht möglich: ' + (r.error || 'unbekannt'), 'err');
     }
   } catch (e) {
     toast('Keine Verbindung.', 'err');
@@ -1195,11 +1224,7 @@ async function start() {
   }
 
   try {
-    const r = await get({ action: 'stammdaten' });
-    if (!r.ok) { if (r.error === 'session') sessionWeg(); return; }
-    S.konten = r.konten; S.kst = r.kostenstellen; S.kmSaetze = r.kmSaetze || [];
-    localStorage.setItem('stammdaten', JSON.stringify(r));
-    fuelleStammdaten();
+    await stammdatenLaden();
   } catch (e) {
     if (!cache) toast('Konto- und Kostenstellenliste konnte nicht geladen werden.', 'err');
   }
@@ -1219,7 +1244,7 @@ async function adminLaden() {
     const r = await post({ session: S.session, action: 'admin_liste' });
     if (!r.ok) {
       if (r.error === 'session') return sessionWeg();
-      $('adm-liste').innerHTML = '<div class="leer">' + r.error + '</div>';
+      $('adm-liste').innerHTML = '<div class="leer">' + esc(r.error) + '</div>';
       return;
     }
     adminZeichnen(r.benutzer || []);
@@ -1244,15 +1269,15 @@ function adminZeichnen(liste) {
     return `
       <div class="nutzer">
         <div class="zeile1">
-          <span class="nm">${b.name}</span>
+          <span class="nm">${esc(b.name)}</span>
           <span>${marken}</span>
         </div>
-        <div class="ml">${b.email}${b.letzterLogin ? ' · zuletzt ' + b.letzterLogin : ''}</div>
+        <div class="ml">${esc(b.email)}${b.letzterLogin ? ' · zuletzt ' + esc(b.letzterLogin) : ''}</div>
         <div class="tasten">
-          <button class="klein" data-tun="aktiv" data-email="${b.email}" ${selbst ? 'disabled' : ''}>
+          <button class="klein" data-tun="aktiv" data-email="${esc(b.email)}" ${selbst ? 'disabled' : ''}>
             ${b.aktiv ? 'Deaktivieren' : 'Aktivieren'}</button>
-          <button class="klein" data-tun="reset" data-email="${b.email}">Passwort neu senden</button>
-          <button class="klein" data-tun="rolle" data-email="${b.email}" ${selbst ? 'disabled' : ''}>
+          <button class="klein" data-tun="reset" data-email="${esc(b.email)}">Passwort neu senden</button>
+          <button class="klein" data-tun="rolle" data-email="${esc(b.email)}" ${selbst ? 'disabled' : ''}>
             ${b.rolle === 'admin' ? 'Admin entziehen' : 'Zum Admin machen'}</button>
         </div>
       </div>`;
@@ -1427,11 +1452,7 @@ function stammUebernehmen(d) {
   localStorage.setItem('stammdaten', JSON.stringify(
     { konten: S.konten, kostenstellen: S.kst, kmSaetze: S.kmSaetze }));
 
-  const konto = $('fm-konto').value, kst = $('fm-kst').value;
   fuelleStammdaten();
-  // deaktivierter Eintrag → zurück auf "– wählen –" statt leerer Auswahl
-  $('fm-konto').value = konto; if ($('fm-konto').selectedIndex < 0) $('fm-konto').value = '';
-  $('fm-kst').value   = kst;   if ($('fm-kst').selectedIndex   < 0) $('fm-kst').value   = '';
 }
 
 function stammEintraege() {
