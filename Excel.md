@@ -124,8 +124,8 @@ Google naloga i u browseru koji je prijavljen na više Google naloga.
 4. Proveri jedan klik, pa sakrij kolonu `Z` i sačuvaj.
 
 **Zašto dve kolone:** sa `HYPERLINK` unutar `LET` Excel za Mac je
-prikazao *Herunterladen*, ali klik nije radio ništa. `HYPERLINK` spolja,
-umotan samo u `WENN`, uobičajen je oblik koji Excel prepoznaje kao link.
+prikazao *Herunterladen*, ali klik nije radio ništa. Sa `HYPERLINK` spolja,
+umotanim samo u `WENN`, klik radi (provereno na Excelu za Mac).
 Pomoćna kolona usput pokazuje koji URL je formula našla, što pomaže kad
 nešto ne radi.
 
