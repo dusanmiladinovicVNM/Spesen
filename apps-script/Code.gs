@@ -18,19 +18,12 @@ const SHEET_ID   = '1rDi4UQDGc_H1fADmFETAEi1Ef5WN9vboF5Av1W1Phmk';              
 const TOKEN_READ = 'HIER_LANGER_ZUFALLSSTRING';        // nur für den CSV-Endpunkt (Excel)
 const PWA_URL    = 'https://dusanmiladinovicvnm.github.io/Spesen/';        // Link im Zugangsmail
 
+// Eigene Web-App-URL, gleich wie CONFIG.url in index.html — für die Foto-Links
+const WEBAPP_URL = 'https://script.google.com/macros/s/AKfycbwERKKiXRwXqzgSSX7_XcFp3QImEpw5jc9ZfEqzrCXlHfJ2FOWAE52oZaWieQWF-p6Spw/exec';
+
 const BILD_ORDNER      = '1F7Y7DKMu9s5JEL67w5Ywy7p88vpMRTCM';      // Wurzelordner für Belegfotos
 const BILD_MONATSORDNER = true;   // Unterordner je Periode, z.B. 2026-07
 const BILD_OEFFENTLICH  = false;  // true = Link ohne Google-Anmeldung sichtbar
-
-/* Kopie der Belegfotos in SharePoint (Microsoft Graph), siehe README
-   "Fotos nach SharePoint". Der geheime Clientschlüssel steht NICHT hier,
-   sondern unter Projekteinstellungen → Skripteigenschaften → SP_SECRET. */
-const SP_TENANT     = 'HIER_TENANT_ID';            // Entra ID → Mandanten-ID
-const SP_CLIENT_ID  = 'HIER_CLIENT_ID';            // App-Registrierung → Anwendungs-ID
-const SP_HOST       = 'HIER_MANDANT.sharepoint.com';
-const SP_SITE       = '/sites/HIER_SITE';
-const SP_BIBLIOTHEK = '';                          // leer = Standardbibliothek "Dokumente"
-const SP_ORDNER     = 'Spesen/Belegfotos';         // Ordner innerhalb der Bibliothek
 
 /* Spalten des CSV-Exports für Excel — Reihenfolge ist verbindlich.
    Die ersten sechs entsprechen dem Bereich Datum:Bemerkung in der Vorlage.
@@ -38,8 +31,10 @@ const SP_ORDNER     = 'Spesen/Belegfotos';         // Ordner innerhalb der Bibli
    steht ausschliesslich in dieser Liste. */
 const EXPORT_SPALTEN = [
   'Datum', 'Brutto', 'MwstSatz', 'KontoNr', 'KstNr', 'Bemerkung',
-  'Mitarbeiter', 'Monat', 'Jahr', 'Art', 'KM', 'BildUrl', 'SpUrl'
+  'Mitarbeiter', 'Monat', 'Jahr', 'Art', 'KM', 'BildUrl', 'BildLink'
 ];
+// BildLink steht nicht im Blatt, sondern wird beim Export aus BildUrl
+// berechnet: ein signierter Link, der genau dieses eine Foto öffnet.
 
 /* Ob ein Zugangsmail verschickt wird, entscheidet der Admin je Benutzer
    im Admin-Bereich. Die fertige Nachricht wird ihm dort ohnehin immer
@@ -65,7 +60,7 @@ const MAX_FEHLER   = 5;
 // A Zeitstempel | B Mitarbeiter | C Email | D BelegNr | E Datum | F Monat |
 // G Jahr | H Brutto | I MwstSatz | J MwstBetrag | K Netto | L KontoNr |
 // M KontoBez | N KstNr | O KstBez | P Bemerkung | Q DedupKey | R Storniert |
-// S Art | T KM | U KmSatz | V BildUrl | W SpUrl (füllt fotosNachSharePoint)
+// S Art | T KM | U KmSatz | V BildUrl
 
 
 // ============================================================
@@ -367,9 +362,11 @@ function doGet(e) {
 
     const iSto = head.indexOf('Storniert');
     const iDat = head.indexOf('Datum');
+    const iBld = head.indexOf('BildUrl');
     const spalten = EXPORT_SPALTEN.map(n => ({ name: n, i: head.indexOf(n) }));
 
-    const fehlend = spalten.filter(x => x.i < 0).map(x => x.name);
+    const fehlend = spalten
+      .filter(x => x.i < 0 && x.name !== 'BildLink').map(x => x.name);
     if (fehlend.length) {
       return out({ ok: false, error: 'Spalte fehlt: ' + fehlend.join(', ') });
     }
@@ -380,13 +377,18 @@ function doGet(e) {
       rows
         .filter(r => String(r[iSto]).toLowerCase() !== 'true')
         .map(r => spalten
-          .map(x => zellen(x.i === iDat ? alsDatum(r[x.i]) : r[x.i]))
+          .map(x => zellen(
+            x.name === 'BildLink' ? fotoLink(r[iBld]) :
+            x.i === iDat          ? alsDatum(r[x.i])  : r[x.i]))
           .join(','))
     ).join('\n');
 
     return ContentService.createTextOutput(csv)
       .setMimeType(ContentService.MimeType.CSV);
   }
+
+  // Beleg-Foto aus der Excel-Vorlage — der Link aus der Spalte BildLink
+  if (p.format === 'foto') return fotoSeite(p.id, p.sig);
 
   const u = session(p.session);
   if (!u) return out({ ok: false, error: 'session' });
@@ -468,6 +470,98 @@ function aktiveListe(name) {
     .map(r => ({ nr: String(r[0]).trim(), bez: String(r[1]).trim() }));
 }
 
+
+// ============================================================
+//  Foto-Links für Excel
+//  Spalte J der Vorlage verlinkt auf fotoSeite(). Wer klickt, braucht
+//  weder ein Google-Konto noch etwas Installiertes. Die Signatur
+//  bindet den Link an genau ein Foto — mit einem Link lässt sich
+//  kein anderes öffnen, und es gibt keinen Token im Excel.
+// ============================================================
+
+/** Schlüssel für die Signatur. Entsteht beim ersten Aufruf von selbst
+ *  in den Skripteigenschaften. Löschen macht alle Links ungültig;
+ *  nach dem nächsten Aktualisieren hat Excel neue. */
+function fotoSchluessel() {
+  const props = PropertiesService.getScriptProperties();
+  let k = props.getProperty('FOTO_SCHLUESSEL');
+  if (!k) {
+    k = Utilities.getUuid() + Utilities.getUuid();
+    props.setProperty('FOTO_SCHLUESSEL', k);
+  }
+  return k;
+}
+
+function fotoSignatur(id) {
+  return Utilities.base64EncodeWebSafe(
+    Utilities.computeHmacSha256Signature(String(id), fotoSchluessel())
+  ).replace(/=+$/, '');
+}
+
+/** Link für die Spalte BildLink, leer ohne Foto. */
+function fotoLink(bildUrl) {
+  const treffer = String(bildUrl || '').match(/[-\w]{25,}/);
+  if (!treffer) return '';
+  return WEBAPP_URL + '?format=foto&id=' + treffer[0] + '&sig=' + fotoSignatur(treffer[0]);
+}
+
+function html(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+/** Seite mit Foto und Knopf "Herunterladen". Apps Script kann keine
+ *  Binärdatei direkt ausliefern; das Bild steckt daher als data:-URL
+ *  in der Seite, der Knopf speichert es mit dem download-Attribut. */
+function fotoSeite(id, sig) {
+  const seite = inhalt => HtmlService
+    .createHtmlOutput(
+      '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<style>' +
+      'body{margin:0;padding:16px;background:#121212;color:#F0F0F0;' +
+      'font-family:-apple-system,"Open Sans",sans-serif;text-align:center}' +
+      'a.knopf{display:inline-block;margin:0 0 16px;padding:12px 28px;border-radius:4px;' +
+      'background:#8FA426;color:#000;font-weight:700;text-decoration:none}' +
+      'img{max-width:100%;max-height:80vh;border:1px solid #464646;border-radius:4px}' +
+      'p{font-size:12px;color:#969696}' +
+      '</style></head><body>' + inhalt + '</body></html>')
+    .setTitle('Beleg-Foto');
+
+  id  = String(id  || '');
+  sig = String(sig || '');
+  if (!/^[-\w]{25,}$/.test(id) || sig !== fotoSignatur(id)) {
+    return seite('<p>Dieser Link ist ungültig. Bitte Excel aktualisieren ' +
+                 '(Daten → Alle aktualisieren) und erneut klicken.</p>');
+  }
+
+  let datei;
+  try {
+    datei = DriveApp.getFileById(id);
+  } catch (err) {
+    return seite('<p>Das Foto ist in Drive nicht mehr vorhanden.</p>');
+  }
+
+  // Ablage: Belegfotos / Person / 2026-08 / Datei — Person in den Dateinamen
+  let person = '';
+  try {
+    let ordner = datei.getParents().next();                       // 2026-08 oder Person
+    if (BILD_MONATSORDNER) ordner = ordner.getParents().next();   // Person
+    if (ordner.getId() !== BILD_ORDNER) person = ordner.getName();
+  } catch (err) { /* nur Kosmetik für den Dateinamen */ }
+
+  const name = ((person ? person + ' ' : '') + datei.getName())
+    .replace(/[\/\\:*?"<>|]/g, '');
+  const blob = datei.getBlob();
+  const daten = 'data:' + (blob.getContentType() || 'image/jpeg') + ';base64,' +
+                Utilities.base64Encode(blob.getBytes());
+
+  return seite(
+    '<a class="knopf" href="' + daten + '" download="' + html(name) + '">Herunterladen</a>' +
+    '<div><img src="' + daten + '" alt="Beleg-Foto"></div>' +
+    '<p>' + html(name) + '<br>Startet der Download nicht, das Bild mit der rechten ' +
+    'Maustaste sichern oder direkt in einen Finder-Ordner ziehen.</p>');
+}
 
 // ============================================================
 //  Schreiben
@@ -1116,171 +1210,6 @@ function sessionsAufraeumen() {
     if (new Date(rows[i][2]) < jetzt) sh.deleteRow(i + 1);
   }
 }
-
-// ============================================================
-//  Fotos nach SharePoint
-//  Ein Zeitauslöser kopiert neue Belegfotos aus Drive nach
-//  SharePoint und trägt den Link in die Spalte SpUrl ein. Excel
-//  verlinkt nur darauf — auf den Rechnern wird nichts installiert.
-//
-//  Ablage: <SP_ORDNER>/2026-08/Jovica Miladinovic/2026-08-04_100.50_R1123.jpg
-//  Die Periode ist die der Abrechnung (Monat/Jahr), nicht das Belegdatum.
-//
-//  Drive bleibt die Quelle: die App liest Fotos weiterhin von dort,
-//  und ein Ausfall bei Microsoft hält die Erfassung nicht auf.
-// ============================================================
-
-const SYNC_MAX_MS = 4.5 * 60 * 1000;   // Apps Script bricht nach 6 Minuten ab
-
-/** Einmal im Editor ausführen: Auslöser alle 15 Minuten, dann ein
- *  erster Lauf — Konfigurationsfehler erscheinen so sofort im Log. */
-function syncEinrichten() {
-  ScriptApp.getProjectTriggers()
-    .filter(t => t.getHandlerFunction() === 'fotosNachSharePoint')
-    .forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('fotosNachSharePoint').timeBased().everyMinutes(15).create();
-  fotosNachSharePoint();
-}
-
-/** Kopiert alle Fotos ohne SpUrl. Was in einem Lauf nicht fertig wird,
- *  holt der nächste nach. Fehler bei Microsoft brechen den Lauf ab;
- *  Apps Script meldet fehlgeschlagene Auslöser per Mail. */
-function fotosNachSharePoint() {
-  const beginn = Date.now();
-  const sh   = sheet('Belege');
-  const rows = sh.getDataRange().getValues();
-  const head = kopf(rows);
-  const ix   = n => head.indexOf(n);
-  const iBld = ix('BildUrl'), iSp  = ix('SpUrl'), iSto = ix('Storniert');
-  const iMit = ix('Mitarbeiter'), iMon = ix('Monat'), iJhr = ix('Jahr');
-
-  const fehlend = ['BildUrl', 'SpUrl', 'Storniert', 'Mitarbeiter', 'Monat', 'Jahr']
-    .filter(n => ix(n) < 0);
-  if (fehlend.length) throw new Error('Spalte fehlt in Belege: ' + fehlend.join(', '));
-
-  let laufwerk = null, kopiert = 0, offen = 0;
-
-  for (let i = 1; i < rows.length; i++) {
-    const r = rows[i];
-    if (String(r[iSp] || '').trim() !== '')        continue;   // erledigt oder markiert
-    if (String(r[iSto]).toLowerCase() === 'true')  continue;
-    const treffer = String(r[iBld] || '').match(/[-\w]{25,}/);
-    if (!treffer) continue;
-
-    if (Date.now() - beginn > SYNC_MAX_MS) { offen++; continue; }
-
-    let datei;
-    try {
-      datei = DriveApp.getFileById(treffer[0]);
-    } catch (err) {
-      // Markieren, sonst versucht es jeder Lauf erneut.
-      // Zelle leeren = neuer Versuch.
-      sh.getRange(i + 1, iSp + 1).setValue('FEHLER: Datei in Drive nicht lesbar');
-      continue;
-    }
-
-    if (!laufwerk) laufwerk = spLaufwerk();
-
-    const periode = r[iJhr] + '-' + String(r[iMon]).padStart(2, '0');
-    const pfad = SP_ORDNER.split('/')
-      .concat([periode, spName(r[iMit]), spName(datei.getName())])
-      .filter(Boolean)
-      .map(encodeURIComponent)
-      .join('/');
-
-    // rename statt replace: zwei Belege gleichen Tags und Betrags ohne
-    // Beleg-Nr. heissen in Drive gleich und dürfen sich nicht überschreiben.
-    const item = graph('put',
-      '/drives/' + laufwerk + '/root:/' + pfad +
-      ':/content?@microsoft.graph.conflictBehavior=rename',
-      { contentType: datei.getMimeType() || 'image/jpeg',
-        payload: datei.getBlob().getBytes() });
-
-    sh.getRange(i + 1, iSp + 1).setValue(item.webUrl);
-    kopiert++;
-  }
-
-  Logger.log(kopiert + ' Foto(s) nach SharePoint kopiert' +
-             (offen ? ', ' + offen + ' folgen im nächsten Lauf' : '') + '.');
-  return { kopiert: kopiert, offen: offen };
-}
-
-/** Zeichen, die SharePoint in Datei- und Ordnernamen nicht zulässt,
- *  dazu der Apostroph, der in Graph-Pfaden gesondert maskiert werden müsste. */
-function spName(s) {
-  return String(s).replace(/["*:<>?\/\\|#%']/g, '').replace(/\s+/g, ' ').trim() || 'unbenannt';
-}
-
-/** Zugriffstoken (Client Credentials), im Cache bis kurz vor Ablauf. */
-function graphToken() {
-  const cache   = CacheService.getScriptCache();
-  const gemerkt = cache.get('graphToken');
-  if (gemerkt) return gemerkt;
-
-  if ([SP_TENANT, SP_CLIENT_ID, SP_HOST, SP_SITE].some(w => w.indexOf('HIER_') >= 0)) {
-    throw new Error('SharePoint ist nicht konfiguriert (SP_* in Code.gs)');
-  }
-  const secret = PropertiesService.getScriptProperties().getProperty('SP_SECRET');
-  if (!secret) throw new Error('Skripteigenschaft SP_SECRET fehlt');
-
-  const res = UrlFetchApp.fetch(
-    'https://login.microsoftonline.com/' + SP_TENANT + '/oauth2/v2.0/token', {
-      method: 'post',
-      payload: {
-        client_id:     SP_CLIENT_ID,
-        client_secret: secret,
-        scope:         'https://graph.microsoft.com/.default',
-        grant_type:    'client_credentials'
-      },
-      muteHttpExceptions: true
-    });
-
-  const r = JSON.parse(res.getContentText() || '{}');
-  if (!r.access_token) {
-    // Häufigste Ursache nach zwei Jahren: der Clientschlüssel ist abgelaufen
-    throw new Error('Anmeldung bei Microsoft fehlgeschlagen: ' +
-                    (r.error_description || r.error || res.getResponseCode()));
-  }
-  cache.put('graphToken', r.access_token,
-            Math.min(21600, Math.max(60, Number(r.expires_in || 3600) - 300)));
-  return r.access_token;
-}
-
-/** Aufruf der Graph-API; wirft bei jedem Status ab 300. */
-function graph(methode, pfad, optionen) {
-  const res = UrlFetchApp.fetch('https://graph.microsoft.com/v1.0' + pfad,
-    Object.assign({
-      method: methode,
-      headers: { Authorization: 'Bearer ' + graphToken() },
-      muteHttpExceptions: true
-    }, optionen || {}));
-
-  const code = res.getResponseCode();
-  const text = res.getContentText();
-  if (code >= 300) throw new Error('Graph ' + code + ' bei ' + pfad + ': ' + text.slice(0, 300));
-  return text ? JSON.parse(text) : {};
-}
-
-/** ID der Dokumentbibliothek — einmal ermitteln, dann aus dem Cache. */
-function spLaufwerk() {
-  const cache   = CacheService.getScriptCache();
-  const gemerkt = cache.get('spLaufwerk');
-  if (gemerkt) return gemerkt;
-
-  const site = graph('get', '/sites/' + SP_HOST + ':' + encodeURI(SP_SITE));
-  let id;
-  if (!SP_BIBLIOTHEK) {
-    id = graph('get', '/sites/' + site.id + '/drive').id;
-  } else {
-    const treffer = graph('get', '/sites/' + site.id + '/drives').value
-      .filter(d => d.name === SP_BIBLIOTHEK)[0];
-    if (!treffer) throw new Error('Bibliothek "' + SP_BIBLIOTHEK + '" nicht gefunden');
-    id = treffer.id;
-  }
-  cache.put('spLaufwerk', id, 21600);
-  return id;
-}
-
 
 /**
  * Wöchentliche Sicherung.

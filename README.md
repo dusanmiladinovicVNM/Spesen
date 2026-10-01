@@ -18,7 +18,7 @@ korisnik ne može uneti beleg pod tuđim imenom.
 ```
 apps-script/
   Code.gs                    ceo backend — prijava, unos, Fahrt, storno, CSV,
-                             kopiranje fotografija u SharePoint
+                             stranica sa fotografijom za Excel
 
 pwa/
   index.html                 CIJELA aplikacija: CSS, HTML, logika, konfiguracija, logo
@@ -55,7 +55,7 @@ Nova tabela, pet listova. Prvi red je zaglavlje, imena kolona doslovno.
 
 | List | Kolone |
 |---|---|
-| `Belege` | `Zeitstempel` `Mitarbeiter` `Email` `BelegNr` `Datum` `Monat` `Jahr` `Brutto` `MwstSatz` `MwstBetrag` `Netto` `KontoNr` `KontoBez` `KstNr` `KstBez` `Bemerkung` `DedupKey` `Storniert` `Art` `KM` `KmSatz` `BildUrl` `SpUrl` |
+| `Belege` | `Zeitstempel` `Mitarbeiter` `Email` `BelegNr` `Datum` `Monat` `Jahr` `Brutto` `MwstSatz` `MwstBetrag` `Netto` `KontoNr` `KontoBez` `KstNr` `KstBez` `Bemerkung` `DedupKey` `Storniert` `Art` `KM` `KmSatz` `BildUrl` |
 | `Parameter` | `Schluessel` `Wert` `GueltigAb` |
 | `Konten` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Kostenstellen` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
@@ -199,81 +199,14 @@ Ako knjigovodstvo nema Google nalog, postavi `BILD_OEFFENTLICH = true` —
 tada link iz kolone `BildUrl` radi bez prijave. Cena je da svako ko dobije
 link vidi taj račun.
 
-**Excel.** Fotografije se same kopiraju u SharePoint (odeljak ispod).
-U koloni **J**, desno od tabele, svaki red sa fotografijom ima link
-**Foto öffnen** na taj fajl. Šablon se ne dira, samo se proširuje udesno.
+**Excel.** U koloni **J**, desno od tabele, svaki red sa fotografijom ima
+link **Herunterladen**. Link vodi na stranicu Apps Scripta sa tom fotografijom
+i dugmetom za preuzimanje. Potpisan je, pa otvara samo tu jednu fotografiju,
+bez tokena i bez Google naloga. Šablon se ne dira, samo se proširuje udesno.
 Postavljanje je u `Excel.md`, odeljak 4.
 
-**Storno ne briše sliku.** Storniranje je povratno, pa fajl ostaje, i u
-Driveu i u SharePointu. Čišćenje po potrebi radi ručno.
-
-## Fotos nach SharePoint
-
-Funkcija `fotosNachSharePoint` u `Code.gs` radi na svakih 15 minuta.
-Svaku fotografiju iz `Belege` koja još nema `SpUrl` kopira iz Drive-a u
-SharePoint, pa link upisuje u `SpUrl`:
-
-```
-<SP_ORDNER>/2026-08/Jovica Miladinovic/2026-08-04_100.50_R1123.jpg
-```
-
-- **Folder po periodi obračuna** (`Monat`/`Jahr`), ne po datumu računa,
-  isto kao u Excelu.
-- **Drive ostaje izvor.** Aplikacija i dalje čita fotografije odatle, pa
-  ispad kod Microsofta ne zaustavlja unos. Lanac je samo kasni.
-- **Ponovni pokušaj je automatski.** Greška kod Microsofta prekida taj
-  prolaz, a sledeći nastavlja tamo gde je stao. Apps Script mejlom javlja
-  okidač koji nije uspeo.
-- **Fotografija obrisana u Drive-u** dobija u `SpUrl` oznaku
-  `FEHLER: Datei in Drive nicht lesbar`. Obriši oznaku da bi se pokušalo ponovo.
-- **Ništa se ne instalira na računarima.** Sve radi server.
-
-### Postavljanje (jednom, ~30 min, potreban M365 admin)
-
-1. **Kolona.** U `Belege` dodaj kolonu `SpUrl` posle `BildUrl` (kolona W),
-   **pre** objavljivanja novog koda. CSV inače javlja `Spalte fehlt: SpUrl`.
-2. **Registracija aplikacije** u [Entra admin centru](https://entra.microsoft.com):
-   **Anwendungen → App-Registrierungen → Neue Registrierung**, ime
-   `Spesen-Fotos`, *nur Konten in diesem Organisationsverzeichnis*.
-   - **Verzeichnis-ID (Mandant)** upiši u `SP_TENANT`, a **Anwendungs-ID** u
-     `SP_CLIENT_ID`.
-   - **Zertifikate & Geheimnisse → Neuer geheimer Clientschlüssel**, 24 meseca.
-     Kopiraj **Wert** (ne ID). U Apps Scriptu: **Projekteinstellungen →
-     Skripteigenschaften → `SP_SECRET`**. Ključ ne ide u kod ni u git.
-   - **API-Berechtigungen → Microsoft Graph → Anwendungsberechtigungen →
-     `Sites.Selected`**, pa **Administratorzustimmung erteilen**.
-3. **Pravo samo na jedan site.** `Sites.Selected` sam po sebi ne daje ništa.
-   U [Graph Explorer](https://developer.microsoft.com/graph/graph-explorer),
-   prijavljen kao admin:
-
-   ```
-   GET  https://graph.microsoft.com/v1.0/sites/<mandant>.sharepoint.com:/sites/<site>
-   ```
-
-   Iz odgovora uzmi `id`, pa:
-
-   ```
-   POST https://graph.microsoft.com/v1.0/sites/<id>/permissions
-   {"roles":["write"],
-    "grantedToIdentities":[{"application":{"id":"<SP_CLIENT_ID>","displayName":"Spesen-Fotos"}}]}
-   ```
-
-   Jednostavnije, ali šire: umesto koraka 3 dodeli `Sites.ReadWrite.All`.
-   Tada aplikacija sme da piše u sve siteove firme.
-4. **Gde ide.** U `Code.gs` popuni:
-   - `SP_HOST` i `SP_SITE`: site na kojem je Excel
-   - `SP_BIBLIOTHEK`: prazno za standardnu biblioteku *Dokumente*
-   - `SP_ORDNER`: folder u biblioteci, npr. onaj pored Excel fajla
-5. **Pokretanje.** U editoru pokreni `syncEinrichten` i potvrdi nove dozvole
-   (spoljni zahtevi, okidači). Postavlja okidač na 15 minuta i odmah kopira
-   postojeće fotografije. Rezultat je u logu.
-6. **Neue Version** u *Bereitstellungen verwalten*.
-7. **Dozvole na folderu.** Ako site vide i ljudi van knjigovodstva, ograniči
-   prava na folder `SP_ORDNER`.
-
-**Ključ ističe posle najviše 24 meseca.** Tada okidač javlja
-`Anmeldung bei Microsoft fehlgeschlagen`. Napravi novi ključ i zameni
-`SP_SECRET`.
+**Storno ne briše sliku.** Storniranje je povratno, pa fajl ostaje.
+Čišćenje po potrebi radi ručno u Driveu.
 
 ## Kilometerkosten
 
@@ -289,7 +222,7 @@ red nego nudi zamenu postojećeg. Ključ je `email|datum|fahrt`.
 
 Kolone `Art`, `KM` i `KmSatz` stoje na kraju lista i služe za kontrolu.
 Power Query ih ne povlači, jer korak *Andere Spalten entfernen* nabraja
-kolone poimence. Jedini dodatak tom koraku je `SpUrl`, za kolonu Foto
+kolone poimence. Jedini dodatak tom koraku je `BildLink`, za kolonu Foto
 (`Excel.md`, odeljak 4).
 
 ## Admin-Bereich
@@ -394,10 +327,10 @@ pa pokreni `zugangVerschicken` ponovo.
 | 29 | Izmena Bezeichnung | stari belezi zadržavaju staru `KontoBez` |
 | 30 | Deaktivacija konta | nestaje iz izbora, stari belezi i Excel nepromenjeni |
 | 31 | Deaktivacija `KmKonto` / poslednje Kostenstelle | odbijeno |
-| 32 | Beleg sa fotografijom, 15 minuta kasnije | fajl u `SP_ORDNER/JJJJ-MM/Ime/`, link u `SpUrl` |
-| 33 | Excel posle osvežavanja | *Foto öffnen* u koloni J otvara tu fotografiju; red bez fotografije prazan |
-| 34 | Dva belega istog dana i iznosa bez Beleg-Nr. | dva fajla u SharePointu, drugi sa dodatkom u imenu |
-| 35 | Pogrešan `SP_SECRET` | okidač ne uspeva, mejl od Apps Scripta, `SpUrl` ostaje prazan |
+| 32 | Excel: klik na *Herunterladen* | stranica sa fotografijom; dugme snima `Ime JJJJ-MM-DD_iznos_nr.jpg` |
+| 33 | Excel: red bez fotografije | kolona J prazna |
+| 34 | Link sa izmenjenim `id` ili `sig` | *Dieser Link ist ungültig* |
+| 35 | Link otvoren u privatnom prozoru, bez Google prijave | fotografija se prikazuje |
 
 Test 1 zaključava nalog na 15 minuta — radi ga sa testnim nalogom.
 
