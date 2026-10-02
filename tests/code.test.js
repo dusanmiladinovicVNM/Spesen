@@ -393,6 +393,89 @@ describe('Spalten nach Namen und Id', () => {
 });
 
 
+describe('Sperre', () => {
+  test('Foto wird ohne Sperre hochgeladen, die Zeile mit Sperre geschrieben', () => {
+    const w = welt();
+    w.zaehler.sperren = 0;
+    assert.equal(beleg(w).ok, true);
+    assert.equal(w.drive.dateien.size, 1);
+    assert.equal(w.zaehler.uploadGesperrt, 0, 'Upload ohne Sperre');
+    assert.equal(w.zaehler.sperren, 1, 'Schreiben mit Sperre');
+  });
+
+  test('besetzt: klare Meldung, nichts geschrieben, Foto im Papierkorb', () => {
+    const w = welt();
+    w.sperre.besetzt = true;
+    assert.equal(beleg(w).error, 'besetzt');
+    assert.equal(daten(w).length, 0);
+    assert.deepEqual([...w.drive.dateien.values()].map(d => d.papierkorb), [true]);
+    assert.equal(fahrt(w).error, 'besetzt');
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', key: 'x' }).error, 'besetzt');
+    assert.equal(post(w, { session: 'T-ADMIN', action: 'admin_liste' }).error, 'besetzt');
+    assert.equal(post(w, { session: 'T-MIA', action: 'stammdaten' }).ok, true, 'Lesen ohne Sperre');
+    w.sperre.besetzt = false;
+    assert.equal(beleg(w).ok, true);
+    assert.equal(daten(w).length, 1);
+  });
+
+  test('derselbe Beleg zweimal gleichzeitig: einmal gespeichert, zweites Foto im Papierkorb', () => {
+    const w = welt();
+    // die zweite Anfrage kommt an, während die erste ihr Foto hochlädt
+    w.sperre.beimSperren = () => assert.equal(beleg(w).ok, true);
+    assert.equal(beleg(w).error, 'duplikat');
+    assert.equal(daten(w).length, 1);
+    const dateien = [...w.drive.dateien.values()];
+    assert.equal(dateien.length, 2);
+    assert.equal(dateien.filter(d => d.papierkorb).length, 1);
+    assert.ok(daten(w)[0][sp('BildUrl')].includes(dateien.find(d => !d.papierkorb).getId()),
+              'die Zeile zeigt auf das behaltene Foto');
+  });
+
+  test('erkanntes Duplikat lädt kein Foto hoch', () => {
+    const w = welt();
+    beleg(w);
+    assert.equal(beleg(w).error, 'duplikat');
+    assert.equal(w.drive.dateien.size, 1);
+  });
+});
+
+
+describe('MWSt-Sätze', () => {
+  const stamm = w => post(w, { session: 'T-MIA', action: 'stammdaten' }).mwstSaetze;
+
+  test('ohne Eintrag in Parameter: die heutigen Sätze', () => {
+    const w = welt();
+    assert.deepEqual(stamm(w), [{ ab: '', saetze: [0, 2.6, 3.8, 8.1] }]);
+    for (const satz of [0, 2.6, 3.8, 8.1]) assert.equal(beleg(w, { mwstSatz: satz, brutto: 10 + satz }).ok, true, satz);
+    for (const satz of [7.7, 8, 99]) assert.equal(beleg(w, { mwstSatz: satz, brutto: 50 + satz }).error, 'mwst', satz);
+  });
+
+  test('aus Parameter, nach Belegdatum, auch mit Komma geschrieben', () => {
+    const w = welt();
+    w.blatt('Parameter').zeilen.push(
+      ['MwstSaetze', '0; 2,5; 3,7; 7,7', ''],
+      ['MwstSaetze', '0; 2.6; 3.8; 8.1', '2024-01-01'],
+      ['MwstSaetze', 8.8, '2030-01-01']);
+    assert.deepEqual(stamm(w), [
+      { ab: '', saetze: [0, 2.5, 3.7, 7.7] },
+      { ab: '2024-01-01', saetze: [0, 2.6, 3.8, 8.1] },
+      { ab: '2030-01-01', saetze: [8.8] }]);
+    const alt = { datum: '2023-12-20', monat: '12', jahr: '2023' };
+    assert.equal(beleg(w, { ...alt, mwstSatz: 7.7 }).ok, true);
+    assert.equal(beleg(w, { ...alt, mwstSatz: 8.1, brutto: 11 }).error, 'mwst');
+    assert.equal(beleg(w, { mwstSatz: 7.7 }).error, 'mwst');
+    assert.equal(beleg(w, { mwstSatz: 8.1 }).ok, true);
+  });
+
+  test('unlesbarer Eintrag: es gelten die heutigen Sätze', () => {
+    const w = welt();
+    w.blatt('Parameter').zeilen.push(['MwstSaetze', 'acht', '']);
+    assert.deepEqual(stamm(w), [{ ab: '', saetze: [0, 2.6, 3.8, 8.1] }]);
+    assert.equal(beleg(w, { mwstSatz: 8.1 }).ok, true);
+  });
+});
+
+
 describe('Konten und Kostenstellen verwalten', () => {
   const admin = (w, x) => post(w, Object.assign({ session: 'T-ADMIN' }, x));
 
@@ -559,6 +642,35 @@ describe('Anmeldung und Sitzungen', () => {
     w.zaehler.digest = 0; login(w, 'admin@x.ch', 'falsch');   const mit  = w.zaehler.digest;
     assert.ok(ohne >= 5000, 'auch ohne Konto wird gehasht');
     assert.ok(Math.abs(ohne - mit) <= 2, ohne + ' / ' + mit);
+  });
+
+  test('der Passwort-Hash läuft ohne Sperre, geschrieben wird mit', () => {
+    const w = mitPasswort();
+    for (const [email, pw] of [['mia@x.ch', 'geheim123'], ['mia@x.ch', 'falsch'], ['niemand@x.ch', 'falsch']]) {
+      w.zaehler.digest = 0; w.zaehler.digestGesperrt = 0; w.zaehler.sperren = 0;
+      login(w, email, pw);
+      assert.ok(w.zaehler.digest >= 5000, email + ' gehasht');
+      assert.ok(w.zaehler.digestGesperrt <= 1, email + ': ' + w.zaehler.digestGesperrt + ' unter der Sperre');
+      assert.equal(w.zaehler.sperren, 1, email);
+    }
+  });
+
+  test('Server besetzt: gleiche Antwort mit und ohne Konto, kein Fehlversuch gezählt', () => {
+    const w = mitPasswort();
+    w.sperre.besetzt = true;
+    for (const email of ['niemand@x.ch', 'mia@x.ch']) assert.equal(login(w, email, 'falsch').error, 'besetzt', email);
+    assert.equal(login(w, 'mia@x.ch', 'geheim123').error, 'besetzt');
+    assert.equal(w.blatt('Benutzer').zeilen[2][5], 0);
+    w.sperre.besetzt = false;
+    assert.equal(login(w, 'mia@x.ch', 'geheim123').ok, true);
+  });
+
+  test('gleichzeitige Fehlversuche gehen nicht verloren', () => {
+    const w = mitPasswort();
+    // während dieser Anmeldung rechnet, zählt eine andere schon einen Fehlversuch
+    w.sperre.beimSperren = () => { w.blatt('Benutzer').zeilen[2][5] = 1; };
+    login(w, 'mia@x.ch', 'falsch');
+    assert.equal(w.blatt('Benutzer').zeilen[2][5], 2);
   });
 
   test('Sperre nach MAX_FEHLER, mit und ohne Konto gleich', () => {

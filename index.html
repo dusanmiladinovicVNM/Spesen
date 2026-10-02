@@ -597,6 +597,7 @@ const S = {
   konten:  [],
   kst:     [],
   kmSaetze: [],
+  mwstSaetze: [],     // [{ab, saetze}] aus "Parameter", leer = Sätze aus dem HTML
   art:     'beleg',
   suffix:  0,
   bild:    null,
@@ -692,6 +693,7 @@ function lesen(params) {
 function formLeeren() {
   ['fm-belegnr', 'fm-brutto', 'fm-km', 'fm-bemerkung', 'fm-konto', 'fm-kst']
     .forEach(id => { $(id).value = ''; });
+  $('fm-mwst').selectedIndex = $('fm-mwst').options.length - 1;   // Normalsatz
   $('fm-vorschau').textContent = '';
   fotoWeg();
   S.suffix = 0;
@@ -742,7 +744,8 @@ async function anmelden() {
       m.textContent = {
         login:    'Benutzername oder Passwort ist falsch.',
         gesperrt: 'Zu viele Fehlversuche. Bitte in 15 Minuten erneut versuchen.',
-        inaktiv:  'Dieser Zugang ist deaktiviert. Bitte melden Sie sich bei uns.'
+        inaktiv:  'Dieser Zugang ist deaktiviert. Bitte melden Sie sich bei uns.',
+        besetzt:  FEHLER_TEXT.besetzt
       }[r.error] || 'Anmeldung nicht möglich.';
       m.classList.add('zeigen');
     }
@@ -803,7 +806,8 @@ async function passwortSpeichern() {
       m.textContent = {
         login:     'Das bisherige Passwort ist falsch.',
         'zu kurz': 'Das neue Passwort muss mindestens 8 Zeichen haben.',
-        session:   'Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.'
+        session:   'Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.',
+        besetzt:   FEHLER_TEXT.besetzt
       }[r.error] || 'Ändern nicht möglich.';
       m.classList.add('zeigen');
     }
@@ -838,7 +842,7 @@ function fuelleMonatJahr() {
   $('fm-jahr').value = j;
 }
 
-/** Baut Konto und Kostenstelle neu auf. Die Auswahl bleibt stehen,
+/** Baut Konto, Kostenstelle und MWSt neu auf. Die Auswahl bleibt stehen,
  *  solange der Eintrag noch aktiv ist, sonst "– wählen –". */
 function fuelleStammdaten() {
   const opt = a => a
@@ -849,6 +853,20 @@ function fuelleStammdaten() {
     el.value = alt;
     if (el.selectedIndex < 0) el.value = '';
   });
+  mwstFuellen();
+}
+
+/** MWSt-Sätze zum Belegdatum. Die Auswahl bleibt, solange es den Satz
+ *  gibt, sonst der Normalsatz (der höchste). Ohne Sätze vom Server
+ *  (älterer Server) bleiben die aus dem HTML. */
+function mwstFuellen() {
+  const e = gueltigAm(S.mwstSaetze, $('fm-datum').value);
+  if (!e || !e.saetze.length) return;
+  const el = $('fm-mwst'), alt = el.value;
+  el.innerHTML = e.saetze.map(Number)
+    .map(x => `<option value="${x}">${String(x).replace('.', ',')}%</option>`).join('');
+  el.value = alt;
+  if (el.selectedIndex < 0) el.value = String(Number(e.saetze[e.saetze.length - 1]));
 }
 
 /** Aktuelle Listen vom Server; true, wenn geladen. */
@@ -856,6 +874,7 @@ async function stammdatenLaden() {
   const r = await lesen({ action: 'stammdaten' });
   if (!r.ok) { if (r.error === 'session') sessionWeg(); return false; }
   S.konten = r.konten; S.kst = r.kostenstellen; S.kmSaetze = r.kmSaetze || [];
+  S.mwstSaetze = r.mwstSaetze || [];
   localStorage.setItem('stammdaten', JSON.stringify(r));
   fuelleStammdaten();
   return true;
@@ -919,14 +938,21 @@ function setzeArt(art) {
   vorschau();
 }
 
+/** Eintrag mit dem jüngsten ab <= datum (leeres ab gilt immer), sonst
+ *  null — dieselbe Regel wie parameter() auf dem Server. */
+function gueltigAm(eintraege, datum) {
+  let best = null;
+  eintraege.forEach(x => {
+    if (x.ab && datum && x.ab > datum) return;
+    if (best === null || x.ab >= best.ab) best = x;
+  });
+  return best;
+}
+
 /** Gültiger Ansatz zum Belegdatum. */
 function kmSatz(datum) {
-  let satz = null, bestAb = '';
-  S.kmSaetze.forEach(x => {
-    if (x.ab && datum && x.ab > datum) return;
-    if (satz === null || x.ab >= bestAb) { satz = x.satz; bestAb = x.ab; }
-  });
-  return satz;
+  const e = gueltigAm(S.kmSaetze, datum);
+  return e ? e.satz : null;
 }
 
 function vorschau() {
@@ -975,6 +1001,7 @@ const FEHLER_TEXT = {
   stamm:   'Konto oder Kostenstelle ist nicht mehr aktiv. Bitte die App neu laden.',
   km:      'Kilometer fehlen.',
   bild:    'Das Foto konnte nicht gespeichert werden. Bitte erneut versuchen.',
+  besetzt: 'Server gerade besetzt. Bitte nochmals senden.',
   serverfehler: 'Technischer Fehler. Bitte später erneut versuchen.'
 };
 
@@ -1230,7 +1257,7 @@ async function stornoKlick(i, btn) {
     } else {
       toast(r.error === 'nicht gefunden'
         ? 'Beleg nicht gefunden — schon storniert? Bitte die Liste neu laden.'
-        : 'Stornieren nicht möglich: ' + (r.error || 'unbekannt'), 'err');
+        : FEHLER_TEXT[r.error] || 'Stornieren nicht möglich: ' + (r.error || 'unbekannt'), 'err');
     }
   } catch (e) {
     toast('Keine Verbindung.', 'err');
@@ -1252,6 +1279,7 @@ async function start() {
   if (cache) {
     const c = JSON.parse(cache);
     S.konten = c.konten; S.kst = c.kostenstellen; S.kmSaetze = c.kmSaetze || [];
+    S.mwstSaetze = c.mwstSaetze || [];
     fuelleStammdaten();
   }
 
@@ -1485,7 +1513,7 @@ function stammUebernehmen(d) {
   S.konten = aktiv(d.konten);
   S.kst    = aktiv(d.kostenstellen);
   localStorage.setItem('stammdaten', JSON.stringify(
-    { konten: S.konten, kostenstellen: S.kst, kmSaetze: S.kmSaetze }));
+    { konten: S.konten, kostenstellen: S.kst, kmSaetze: S.kmSaetze, mwstSaetze: S.mwstSaetze }));
 
   fuelleStammdaten();
 }
@@ -1642,7 +1670,7 @@ $('lg-pass').addEventListener('keydown', e => { if (e.key === 'Enter') anmelden(
 $('fm-brutto').addEventListener('input', vorschau);
 $('fm-km').addEventListener('input', vorschau);
 $('fm-mwst').addEventListener('change', vorschau);
-$('fm-datum').addEventListener('change', vorschau);
+$('fm-datum').addEventListener('change', () => { mwstFuellen(); vorschau(); });
 $('fm-speichern').addEventListener('click', () => speichern(false));
 document.querySelectorAll('.tab[data-art]').forEach(t =>
   t.addEventListener('click', () => setzeArt(t.dataset.art)));

@@ -114,9 +114,11 @@ describe('App im Browser', { skip: OHNE }, () => {
     await p.selectOption('#fm-konto', '4430');
     await p.selectOption('#fm-kst', '821');
     await p.fill('#fm-bemerkung', 'vertraulich');
+    await p.selectOption('#fm-mwst', '2.6');
     await foto(p);
     await p.click('#fm-abmelden');
     await anmelden(p, 'mia@x.ch');
+    assert.equal(await p.inputValue('#fm-mwst'), '8.1', 'wieder der Normalsatz');
     assert.equal(await p.inputValue('#fm-konto'), '');
     assert.equal(await p.inputValue('#fm-kst'), '');
     assert.equal(await p.inputValue('#fm-bemerkung'), '');
@@ -292,6 +294,43 @@ describe('App im Browser', { skip: OHNE }, () => {
     const fremd = alle.filter(u => !/^(file:|data:|blob:|https:\/\/script\.google\.com\/)/.test(u));
     assert.deepEqual(fremd, []);
     assert.ok(alle.some(u => u.endsWith('/fonts/open-sans-latin.woff2')), 'Schrift aus fonts/');
+    await schliessen();
+  });
+
+  test('MWSt-Auswahl kommt aus Parameter und folgt dem Belegdatum', async () => {
+    const w = welt();
+    w.blatt('Parameter').zeilen.push(
+      ['MwstSaetze', '0; 2,5; 3,7; 7,7', ''], ['MwstSaetze', '0; 2.6; 3.8; 8.1', '2024-01-01']);
+    const { p, schliessen } = await oeffnen(w);
+    await anmelden(p, 'mia@x.ch');
+    const auswahl = () => p.$eval('#fm-mwst', el => [[...el.options].map(o => o.textContent), el.value]);
+    assert.deepEqual(await auswahl(), [['0%', '2,6%', '3,8%', '8,1%'], '8.1']);
+    await p.selectOption('#fm-mwst', '3.8');
+    await p.fill('#fm-datum', '2023-12-20');
+    await p.dispatchEvent('#fm-datum', 'change');
+    assert.deepEqual(await auswahl(), [['0%', '2,5%', '3,7%', '7,7%'], '7.7'], 'Normalsatz, 3,8 gibt es nicht');
+    await belegErfassen(p);
+    await p.selectOption('#fm-monat', '12');
+    await p.selectOption('#fm-jahr', '2025');
+    assert.equal(await toastNach(p, () => p.click('#fm-speichern')), 'Beleg gespeichert.');
+    assert.equal(w.blatt('Belege').zeilen[1][sp('MwstSatz')], 0.077);
+    await schliessen();
+  });
+
+  test('Server besetzt: Bitte um erneutes Senden, beim Speichern und Anmelden', async () => {
+    const w = welt();
+    const { p, schliessen } = await oeffnen(w);
+    await anmelden(p, 'mia@x.ch');
+    await belegErfassen(p);
+    w.sperre.besetzt = true;
+    assert.equal(await toastNach(p, () => p.click('#fm-speichern')),
+                 'Server gerade besetzt. Bitte nochmals senden.');
+    await p.click('#fm-abmelden');
+    await p.fill('#lg-email', 'mia@x.ch');
+    await p.fill('#lg-pass', 'geheim123');
+    await p.click('#lg-senden');
+    await p.waitForSelector('#lg-meldung.zeigen');
+    assert.equal(await p.textContent('#lg-meldung'), 'Server gerade besetzt. Bitte nochmals senden.');
     await schliessen();
   });
 
