@@ -54,11 +54,14 @@ const SESSION_TAGE = 60;
 const SPERRE_MIN   = 15;
 const MAX_FEHLER   = 5;
 
-// Spaltenreihenfolge in "Belege" — muss mit der Tabelle übereinstimmen
-// A Zeitstempel | B Mitarbeiter | C Email | D BelegNr | E Datum | F Monat |
-// G Jahr | H Brutto | I MwstSatz | J MwstBetrag | K Netto | L KontoNr |
-// M KontoBez | N KstNr | O KstBez | P Bemerkung | Q DedupKey | R Storniert |
-// S Art | T KM | U KmSatz | V BildUrl
+/* Spalten in "Belege". Der Server sucht jede über ihren Namen in der
+   Kopfzeile — die Reihenfolge ist frei, eigene Zusatzspalten stören
+   nicht. Id darf fehlen: idsNachtragen() legt die Spalte an. */
+const BELEGE_SPALTEN = [
+  'Zeitstempel', 'Mitarbeiter', 'Email', 'BelegNr', 'Datum', 'Monat', 'Jahr',
+  'Brutto', 'MwstSatz', 'MwstBetrag', 'Netto', 'KontoNr', 'KontoBez', 'KstNr',
+  'KstBez', 'Bemerkung', 'DedupKey', 'Storniert', 'Art', 'KM', 'KmSatz', 'BildUrl', 'Id'
+];
 
 
 // ============================================================
@@ -124,28 +127,53 @@ function textSetzen(sh, zeile, spalte, wert) {
   sh.getRange(zeile, spalte).setNumberFormat('@').setValue(textWert(wert));
 }
 
-/** Schreibt werte ab Spalte 1 in die Zeile. textSpalten: 1-basierte
- *  Spaltennummern, die Text enthalten — sie bekommen zuerst das Format,
- *  damit Sheets beim Schreiben nichts umdeutet. */
-function zeileSchreiben(sh, zeile, werte, textSpalten) {
-  const text = new Set(textSpalten);
+/** Schreibt werte ab Spalte ab (ohne Angabe 1) in die Zeile.
+ *  textSpalten: 1-basierte Spaltennummern, die Text enthalten — sie
+ *  bekommen zuerst das Format, damit Sheets beim Schreiben nichts umdeutet. */
+function zeileSchreiben(sh, zeile, werte, textSpalten, ab) {
+  ab = ab || 1;
+  const bis  = ab + werte.length - 1;
+  const text = new Set(textSpalten.filter(c => c >= ab && c <= bis));
   // zusammenhängende Spalten in einem Aufruf formatieren
-  textSpalten.slice().sort((a, b) => a - b).forEach((c, i, a) => {
+  [...text].sort((a, b) => a - b).forEach((c, i, a) => {
     if (i > 0 && a[i - 1] === c - 1) return;
     let ende = c;
     while (text.has(ende + 1)) ende++;
     sh.getRange(zeile, c, 1, ende - c + 1).setNumberFormat('@');
   });
-  sh.getRange(zeile, 1, 1, werte.length)
-    .setValues([werte.map((v, i) => text.has(i + 1) ? textWert(v) : v)]);
+  sh.getRange(zeile, ab, 1, werte.length)
+    .setValues([werte.map((v, i) => text.has(ab + i) ? textWert(v) : v)]);
 }
 
 /** Textspalten in "Belege", nach Namen — Datum ist yyyy-mm-dd als Text */
 const BELEGE_TEXT = ['Mitarbeiter', 'Email', 'BelegNr', 'Datum', 'KontoNr', 'KontoBez',
-  'KstNr', 'KstBez', 'Bemerkung', 'DedupKey', 'Art', 'BildUrl'];
+  'KstNr', 'KstBez', 'Bemerkung', 'DedupKey', 'Art', 'BildUrl', 'Id'];
 
 function belegeTextSpalten(head) {
   return BELEGE_TEXT.map(n => head.indexOf(n) + 1).filter(c => c > 0);
+}
+
+/** Fehlermeldung, wenn in "Belege" eine Spalte fehlt, sonst ''.
+ *  Ohne diese Prüfung ginge der Wert einer fehlenden Spalte still verloren. */
+function belegeFehlend(head) {
+  const fehlend = BELEGE_SPALTEN.filter(n => n !== 'Id' && head.indexOf(n) < 0);
+  return fehlend.length ? 'Spalte fehlt: ' + fehlend.join(', ') : '';
+}
+
+/** Schreibt einen Eintrag in "Belege", jede Spalte nach ihrem Namen.
+ *  werte: {Spaltenname: Wert}. Beschrieben werden nur diese Spalten,
+ *  zusammenhängende am Stück — eigene Spalten der Buchhaltung bleiben
+ *  unberührt, samt Formeln, auch wenn eine Fahrt ersetzt wird. */
+function belegeSchreiben(sh, zeile, head, werte) {
+  const hat  = i => i < head.length && Object.prototype.hasOwnProperty.call(werte, head[i]);
+  const text = belegeTextSpalten(head);
+  for (let i = 0; i < head.length; i++) {
+    if (!hat(i)) continue;
+    let ende = i;
+    while (hat(ende + 1)) ende++;
+    zeileSchreiben(sh, zeile, head.slice(i, ende + 1).map(h => werte[h]), text, i + 1);
+    i = ende;
+  }
 }
 
 /** Im Editor einmal ausführen: prüft, wie das echte Sheets die
@@ -170,12 +198,14 @@ function sheetsSelbsttest() {
 }
 
 /** Zeilennummer eines eigenen, nicht stornierten Belegs, oder 0.
- *  Gesucht wird über den DedupKey. Stimmt die mitgeschickte Zeile noch
- *  (gleicher Schlüssel), gilt genau sie — so trifft es auch bei zwei
- *  Zeilen mit demselben Schlüssel die angetippte. Ohne Schlüssel gilt
- *  die Zeilennummer nur für Zeilen, die selbst keinen haben.
- *  Gelesen werden nur die drei nötigen Spalten, nicht das ganze Blatt. */
-function belegZeile(sh, u, key, zeile) {
+ *  b: {id, key, zeile} aus der Anfrage. Gesucht wird über die Id.
+ *  Für Zeilen ohne Id (vor idsNachtragen() oder ohne die Spalte) über
+ *  den DedupKey: Stimmt die mitgeschickte Zeile noch (gleicher
+ *  Schlüssel), gilt genau sie — so trifft es auch bei zwei Zeilen mit
+ *  demselben Schlüssel die angetippte. Ohne Schlüssel gilt die
+ *  Zeilennummer nur für Zeilen, die selbst keinen haben.
+ *  Gelesen werden nur die nötigen Spalten, nicht das ganze Blatt. */
+function belegZeile(sh, u, b) {
   const letzte = sh.getLastRow();
   if (letzte < 2) return 0;
   const head   = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
@@ -191,8 +221,15 @@ function belegZeile(sh, u, key, zeile) {
     String(eml[i]).trim().toLowerCase() === ich && String(sto[i]).toLowerCase() !== 'true';
   const k = i => String(keys[i] == null ? '' : keys[i]).trim();
 
-  key = String(key || '').trim();
-  const hinweis = Number(zeile) - 2;          // Index in den Spalten, NaN ohne Zeile
+  const id  = String(b.id || '').trim();
+  const ids = id ? spalte('Id') : null;
+  if (ids) {
+    for (let i = 0; i < ids.length; i++) if (String(ids[i]).trim() === id && eigen(i)) return i + 2;
+    return 0;
+  }
+
+  const key     = String(b.key || '').trim();
+  const hinweis = Number(b.zeile) - 2;        // Index in den Spalten, NaN ohne Zeile
   if (key) {
     if (eigen(hinweis) && k(hinweis) === key) return hinweis + 2;
     for (let i = 0; i < eml.length; i++) if (k(i) === key && eigen(i)) return i + 2;
@@ -562,14 +599,11 @@ function doGet(e) {
   // Beleg-Foto für foto.html — der Link aus der Spalte BildLink
   if (p.format === 'foto') return fotoDaten(p.id, p.sig);
 
-  // GET mit Sitzung nur noch für eine geöffnete alte App — die aktuelle
-  // fragt per POST, damit das Token nicht in URLs und Logs landet
-  const u = session(p.session);
-  if (!u) return out({ ok: false, error: 'session' });
-  return lesen(p, u);
+  // Alles mit Sitzung läuft per POST, damit das Token nicht in URLs und Logs landet
+  return out({ ok: false, error: 'anfrage' });
 }
 
-/** Lesende Aktionen, ohne Sperre — für GET und POST gleich. */
+/** Lesende Aktionen, ohne Sperre. */
 function lesen(p, u) {
   if (p.action === 'stammdaten') {
     return out({
@@ -588,7 +622,7 @@ function lesen(p, u) {
     const iBld = head.indexOf('BildUrl');
     if (head.indexOf('Email') < 0 || iBld < 0) return out({ ok: false, error: 'Spalte fehlt' });
 
-    const zeile = belegZeile(sh, u, p.key, p.zeile);
+    const zeile = belegZeile(sh, u, p);
     if (!zeile) return out({ ok: false, error: 'nicht gefunden' });
 
     const treffer = String(sh.getRange(zeile, iBld + 1).getValue() || '').match(/[-\w]{25,}/);
@@ -609,8 +643,9 @@ function lesen(p, u) {
     rows.shift();
     const ix = n => head.indexOf(n);
 
-    // _zeile = broj reda u trenutku čitanja. Storno i foto idu po
-    // DedupKey (belegZeile), a _zeile je samo rezerva za redove bez ključa
+    // _zeile = broj reda u trenutku čitanja. Storno i foto idu po Id,
+    // za stare redove bez Id po DedupKey (belegZeile); _zeile je samo
+    // rezerva za redove bez ključa
     const iDat = head.indexOf('Datum');
     const alle = rows.map((r, i) => {
       const o = { _zeile: i + 2 };
@@ -839,6 +874,8 @@ function beleg(b, u) {
   const rows = sh.getDataRange().getValues();
   const head = kopf(rows);
   rows.shift();
+  const spalteFehlt = belegeFehlend(head);   // vor dem Foto, sonst bliebe es verwaist
+  if (spalteFehlt) return out({ ok: false, error: spalteFehlt });
   const iKey = head.indexOf('DedupKey');
   const iSto = head.indexOf('Storniert');
 
@@ -856,30 +893,31 @@ function beleg(b, u) {
     }
   }
 
-  zeileSchreiben(sh, sh.getLastRow() + 1, [
-    new Date(),                 // Zeitstempel
-    u.name,                     // Mitarbeiter  ← aus der Sitzung
-    u.email,                    // Email        ← aus der Sitzung
-    b.belegNr || '',
-    String(b.datum),            // yyyy-mm-dd als Text, keine Zeitzone
-    Number(b.monat),
-    Number(b.jahr),
-    brutto,
-    satz / 100,                 // 0.081 — Excel-Prozentformat erwartet das so
-    mwst,
-    netto,
-    konto.nr,                   // Text: führende Nullen bleiben
-    konto.bez,
-    kst.nr,
-    kst.bez,
-    String(b.bemerkung),
-    key,
-    false,
-    'Beleg',
-    '',
-    '',
-    bildUrl
-  ], belegeTextSpalten(head));
+  belegeSchreiben(sh, sh.getLastRow() + 1, head, {
+    Zeitstempel: new Date(),
+    Mitarbeiter: u.name,             // ← aus der Sitzung
+    Email:       u.email,            // ← aus der Sitzung
+    BelegNr:     b.belegNr || '',
+    Datum:       String(b.datum),    // yyyy-mm-dd als Text, keine Zeitzone
+    Monat:       Number(b.monat),
+    Jahr:        Number(b.jahr),
+    Brutto:      brutto,
+    MwstSatz:    satz / 100,         // 0.081 — Excel-Prozentformat erwartet das so
+    MwstBetrag:  mwst,
+    Netto:       netto,
+    KontoNr:     konto.nr,           // Text: führende Nullen bleiben
+    KontoBez:    konto.bez,
+    KstNr:       kst.nr,
+    KstBez:      kst.bez,
+    Bemerkung:   String(b.bemerkung),
+    DedupKey:    key,
+    Storniert:   false,
+    Art:         'Beleg',
+    KM:          '',
+    KmSatz:      '',
+    BildUrl:     bildUrl,
+    Id:          Utilities.getUuid()
+  });
 
   return out({ ok: true, mwst: mwst, netto: netto, bild: !!bildUrl });
 }
@@ -913,9 +951,12 @@ function fahrt(b, u) {
   const rows = sh.getDataRange().getValues();
   const head = kopf(rows);
   rows.shift();
+  const spalteFehlt = belegeFehlend(head);
+  if (spalteFehlt) return out({ ok: false, error: spalteFehlt });
   const iKey = head.indexOf('DedupKey');
   const iSto = head.indexOf('Storniert');
   const iKm  = head.indexOf('KM');
+  const iId  = head.indexOf('Id');
 
   let treffer = 0;
   for (let i = 0; i < rows.length; i++) {
@@ -932,17 +973,34 @@ function fahrt(b, u) {
   const text = km + ' km à ' + satz.toFixed(2) +
                (b.bemerkung ? ' — ' + String(b.bemerkung) : '');
 
-  const zeile = [
-    new Date(), u.name, u.email, '',
-    String(b.datum), Number(b.monat), Number(b.jahr),
-    brutto, 0, 0, brutto,
-    kontoNr, kontoBez,
-    kst.nr, kst.bez,
-    text, key, false,
-    'Fahrt', km, satz, ''
-  ];
+  // Beim Ersetzen bleibt die Id — es ist derselbe Eintrag
+  const id = (treffer && iId >= 0 && String(rows[treffer - 2][iId]).trim()) || Utilities.getUuid();
 
-  zeileSchreiben(sh, treffer || sh.getLastRow() + 1, zeile, belegeTextSpalten(head));
+  belegeSchreiben(sh, treffer || sh.getLastRow() + 1, head, {
+    Zeitstempel: new Date(),
+    Mitarbeiter: u.name,
+    Email:       u.email,
+    BelegNr:     '',
+    Datum:       String(b.datum),
+    Monat:       Number(b.monat),
+    Jahr:        Number(b.jahr),
+    Brutto:      brutto,
+    MwstSatz:    0,
+    MwstBetrag:  0,
+    Netto:       brutto,
+    KontoNr:     kontoNr,
+    KontoBez:    kontoBez,
+    KstNr:       kst.nr,
+    KstBez:      kst.bez,
+    Bemerkung:   text,
+    DedupKey:    key,
+    Storniert:   false,
+    Art:         'Fahrt',
+    KM:          km,
+    KmSatz:      satz,
+    BildUrl:     '',
+    Id:          id
+  });
 
   return out({ ok: true, brutto: brutto, satz: satz, ersetzt: !!treffer });
 }
@@ -958,7 +1016,7 @@ function storno(b, u) {
       error: 'Spalte fehlt. Gefundene Kopfzeile: ' + head.join(' | ') });
   }
 
-  const zeile = belegZeile(sh, u, b.key, b.zeile);
+  const zeile = belegZeile(sh, u, b);
   if (!zeile) return out({ ok: false, error: 'nicht gefunden' });
 
   sh.getRange(zeile, iSto + 1).setValue(true);
@@ -974,6 +1032,37 @@ function kopfPruefen() {
     Logger.log(n + ' → ' + kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues())
       .map(h => '[' + h + ']').join(' '));
   });
+}
+
+/** Nach dem Update einmal im Editor ausführen: legt in "Belege" die
+ *  Spalte Id an, falls sie fehlt, und gibt jeder Zeile ohne Id eine.
+ *  Mehrfach ausführen schadet nicht. Meldet auch fehlende Spalten. */
+function idsNachtragen() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sh   = sheet('Belege');
+    const head = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+    let iId = head.indexOf('Id');
+    if (iId < 0) {
+      iId = head.length;                       // erste freie Spalte
+      textSetzen(sh, 1, iId + 1, 'Id');
+      head.push('Id');
+    }
+    Logger.log(belegeFehlend(head) || 'Alle Spalten vorhanden.');
+
+    const n = sh.getLastRow() - 1;
+    let neu = 0;
+    if (n > 0) {
+      const bereich = sh.getRange(2, iId + 1, n, 1);
+      const ids = bereich.getValues();
+      ids.forEach(z => { if (String(z[0]).trim() === '') { z[0] = Utilities.getUuid(); neu++; } });
+      if (neu) bereich.setNumberFormat('@').setValues(ids);
+    }
+    Logger.log(neu + ' Id(s) nachgetragen, Spalte ' + (iId + 1) + '.');
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 

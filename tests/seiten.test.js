@@ -34,3 +34,14 @@ test('index.html: jede id nur einmal', () => {
   const doppelt = ids.filter((id, i) => ids.indexOf(id) !== i);
   assert.deepEqual(doppelt, []);
 });
+
+test('Schrift liegt im Repo, nichts von Google Fonts', () => {
+  const wurzel = path.join(__dirname, '..');
+  for (const datei of ['index.html', 'foto.html']) {
+    assert.doesNotMatch(fs.readFileSync(path.join(wurzel, datei), 'utf8'), /fonts\.(googleapis|gstatic)\.com/, datei);
+  }
+  const html = fs.readFileSync(path.join(wurzel, 'index.html'), 'utf8');
+  const dateien = [...html.matchAll(/url\((fonts\/[^)]+)\)/g)].map(m => m[1]);
+  assert.deepEqual(dateien, ['fonts/open-sans-latin.woff2', 'fonts/open-sans-latin-ext.woff2']);
+  for (const d of dateien.concat('fonts/OFL.txt')) assert.ok(fs.existsSync(path.join(wurzel, d)), d);
+});

@@ -7,17 +7,18 @@ const { laden, json } = require('./gas');
 
 const BELEGE = ['Zeitstempel', 'Mitarbeiter', 'Email', 'BelegNr', 'Datum', 'Monat', 'Jahr',
   'Brutto', 'MwstSatz', 'MwstBetrag', 'Netto', 'KontoNr', 'KontoBez', 'KstNr', 'KstBez',
-  'Bemerkung', 'DedupKey', 'Storniert', 'Art', 'KM', 'KmSatz', 'BildUrl'];
+  'Bemerkung', 'DedupKey', 'Storniert', 'Art', 'KM', 'KmSatz', 'BildUrl', 'Id'];
 const BENUTZER = ['Email', 'Name', 'PassHash', 'Salt', 'Aktiv', 'Fehler', 'GesperrtBis',
   'LetzterLogin', 'OrdnerId', 'PwGeaendert', 'Rolle'];
 const sp = n => BELEGE.indexOf(n);
 
 const TOKEN = 'csv-token-fuer-tests';
 
-function welt(optionen) {
+/** optionen.belege: eigene Kopfzeile für "Belege", optionen.uuid: siehe gas.js */
+function welt(optionen = {}) {
   const morgen = new Date(Date.now() + 86400000);
   const w = laden({
-    Belege: [BELEGE],
+    Belege: [optionen.belege || BELEGE],
     Konten: [['Nr', 'Bezeichnung', 'Aktiv', 'Sortierung'],
       [4430, 'Reisekosten', true, 10], [6210, 'Fahrzeugkosten', true, 20], [5000, 'Alt', false, 30]],
     Kostenstellen: [['Nr', 'Bezeichnung', 'Aktiv', 'Sortierung'],
@@ -54,6 +55,8 @@ const keineFormeln = w => {
     assert.deepEqual(w.blatt(n).formeln, [], 'Formel in ' + n);
   }
 };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** ein Zeichen sicher verändern (nicht zufällig gleich bleiben) */
 const anders = (s, i) => s.slice(0, i) + (s[i] === 'A' ? 'B' : 'A') + s.slice(i + 1);
@@ -196,7 +199,7 @@ describe('Storno und Foto', () => {
     beleg(w, { brutto: 10, bemerkung: 'eins' });
     beleg(w, { brutto: 20, bemerkung: 'zwei' });
     beleg(w, { session: 'T-ADMIN', brutto: 30, bemerkung: 'admin' });
-    const liste = json(get(w, { session: 'T-MIA', action: 'meine', monat: '8', jahr: '2026' })).belege;
+    const liste = post(w, { session: 'T-MIA', action: 'meine', monat: '8', jahr: '2026' }).belege;
     // jemand sortiert die Tabelle von Hand um
     const b = w.blatt('Belege');
     b.zeilen = [b.zeilen[0], ...b.zeilen.slice(1).reverse()];
@@ -250,12 +253,142 @@ describe('Storno und Foto', () => {
     assert.equal(storniert(w, 'ohne Schlüssel'), true);
   });
 
+  test('über die Id: trifft nach dem Umsortieren, Fremdes nie', () => {
+    const { w, liste } = mitBelegen();
+    const eins = liste.find(b => b.Bemerkung === 'eins');
+    assert.match(eins.Id, UUID);
+    assert.equal(post(w, { session: 'T-MIA', action: 'bild', id: eins.Id }).ok, true);
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', id: eins.Id, zeile: eins._zeile }).ok, true);
+    assert.deepEqual(['eins', 'zwei', 'admin'].map(bem => storniert(w, bem)), [true, false, false]);
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', id: eins.Id }).error, 'nicht gefunden');
+    const adminId = daten(w).find(z => z[sp('Bemerkung')] === 'admin')[sp('Id')];
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', id: adminId }).error, 'nicht gefunden');
+    assert.equal(post(w, { session: 'T-MIA', action: 'bild', id: adminId }).error, 'nicht gefunden');
+  });
+
+  test('Id hat Vorrang vor Schlüssel und Zeilennummer', () => {
+    const w = welt();
+    beleg(w, { bemerkung: 'original' });
+    const b = w.blatt('Belege');
+    const kopie = b.zeilen[1].slice();
+    kopie[sp('Bemerkung')] = 'kopie'; kopie[sp('Id')] = 'eigene-id-der-kopie';
+    b.zeilen.push(kopie);
+    // Schlüssel und Zeilennummer zeigen aufs Original, die Id auf die Kopie
+    const r = post(w, { session: 'T-MIA', action: 'storno', id: 'eigene-id-der-kopie',
+                        key: kopie[sp('DedupKey')], zeile: 2 });
+    assert.equal(r.ok, true);
+    assert.equal(storniert(w, 'kopie'), true);
+    assert.equal(storniert(w, 'original'), false);
+  });
+
   test('Foto über den Schlüssel nach dem Umsortieren', () => {
     const { w, liste } = mitBelegen();
     const eins = liste.find(b => b.Bemerkung === 'eins');
-    const r = json(get(w, { session: 'T-MIA', action: 'bild', key: eins.DedupKey, zeile: eins._zeile }));
+    const r = post(w, { session: 'T-MIA', action: 'bild', key: eins.DedupKey, zeile: eins._zeile });
     assert.equal(r.ok, true);
     assert.match(r.bild, /^data:image\/jpeg;base64,/);
+  });
+});
+
+
+describe('Spalten nach Namen und Id', () => {
+  /** Zeile als {Spaltenname: Wert}, wie immer die Kopfzeile aussieht */
+  const nachName = (w, z) => Object.fromEntries(
+    w.blatt('Belege').zeilen[0].map((h, i) => [h, z[i] === undefined ? '' : z[i]]));
+
+  test('Reihenfolge der Spalten ist frei, eigene Spalten bleiben leer', () => {
+    // Kopfzeile umgedreht, dazwischen eine eigene Spalte der Buchhaltung
+    const kopfzeile = BELEGE.slice().reverse();
+    kopfzeile.splice(5, 0, 'Notiz');
+    const w = welt({ belege: kopfzeile });
+    assert.equal(beleg(w, { belegNr: '0012' }).ok, true);
+    assert.equal(fahrt(w).ok, true);
+    keineFormeln(w);
+
+    const [b, f] = daten(w).map(z => nachName(w, z));
+    assert.deepEqual(
+      [b.Mitarbeiter, b.Email, b.BelegNr, b.Datum, b.Monat, b.Jahr, b.Brutto, b.MwstSatz,
+       b.MwstBetrag, b.Netto, b.KontoNr, b.KontoBez, b.KstNr, b.KstBez, b.Bemerkung,
+       b.Storniert, b.Art, b.Notiz],
+      ['Mia Muster', 'mia@x.ch', '0012', '2026-08-04', 8, 2026, 45.8, 0.081,
+       3.43, 42.37, '4430', 'Reisekosten', '995', 'Allgemein', 'Hotel Bern',
+       false, 'Beleg', '']);
+    assert.equal(Object.prototype.toString.call(b.Zeitstempel), '[object Date]');   // Date aus Code.gs (anderer Kontext)
+    assert.match(b.BildUrl, /^https:\/\/drive\.google\.com\//);
+    assert.match(b.Id, UUID);
+    assert.deepEqual([f.Art, f.KM, f.KmSatz, f.Brutto, f.KontoNr, f.KontoBez, f.Notiz],
+                     ['Fahrt', 120, 0.7, 84, '6210', 'Fahrzeugkosten', '']);
+
+    // Liste und CSV lesen nach Namen
+    const liste = post(w, { session: 'T-MIA', action: 'meine', monat: '8', jahr: '2026' }).belege;
+    assert.deepEqual(liste.map(x => x.Art), ['Beleg', 'Fahrt']);
+    const csv = get(w, { format: 'csv', token: TOKEN }).getContent().split('\n');
+    assert.match(csv[1], /^"2026-08-04","45.8","0.081","4430","995","Hotel Bern","Mia Muster"/);
+  });
+
+  test('jeder Eintrag bekommt eine eigene Id', () => {
+    const w = welt();
+    beleg(w, { brutto: 10 });
+    beleg(w, { brutto: 20 });
+    fahrt(w);
+    const ids = daten(w).map(z => z[sp('Id')]);
+    ids.forEach(id => assert.match(id, UUID));
+    assert.equal(new Set(ids).size, 3);
+  });
+
+  test('Fahrt ersetzen: gleiche Id, eigene Spalten bleiben unberührt', () => {
+    const w = welt({ belege: BELEGE.concat('Notiz') });
+    fahrt(w, { km: 100 });
+    const id = daten(w)[0][sp('Id')];
+    assert.match(id, UUID);
+    // Buchhaltung notiert etwas — als Text eingegeben, Sheets liest es so zurück
+    daten(w)[0][BELEGE.length] = '-Rückfrage';
+    assert.equal(fahrt(w, { km: 50, ersetzen: true }).ersetzt, true);
+    assert.equal(daten(w).length, 1);
+    const z = daten(w)[0];
+    assert.deepEqual([z[sp('KM')], z[sp('Id')], z[BELEGE.length]], [50, id, '-Rückfrage']);
+    keineFormeln(w);
+  });
+
+  test('fehlende Spalte: Meldung statt stillem Verlust, kein Foto abgelegt', () => {
+    const w = welt({ belege: BELEGE.filter(n => n !== 'MwstBetrag') });
+    assert.equal(beleg(w).error, 'Spalte fehlt: MwstBetrag');
+    assert.equal(fahrt(w).error, 'Spalte fehlt: MwstBetrag');
+    assert.equal(daten(w).length, 0);
+    assert.equal(w.drive.dateien.size, 0);
+  });
+
+  test('ohne Spalte Id läuft alles wie bisher, über den Schlüssel', () => {
+    const ohneId = BELEGE.filter(n => n !== 'Id');
+    const w = welt({ belege: ohneId });
+    assert.equal(beleg(w).ok, true);
+    assert.equal(fahrt(w).ok, true);
+    assert.ok(daten(w).every(z => z.length === ohneId.length), 'nichts neben die Tabelle geschrieben');
+    const [b] = post(w, { session: 'T-MIA', action: 'meine', monat: '8', jahr: '2026' }).belege;
+    assert.equal(b.Id, undefined);
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', id: 'irgendwas', key: b.DedupKey }).ok, true);
+  });
+
+  test('idsNachtragen: legt die Spalte an, füllt Lücken, mehrfach harmlos', () => {
+    const ohneId = BELEGE.filter(n => n !== 'Id');
+    const w = welt({ belege: ohneId });
+    beleg(w);
+    fahrt(w);
+    w.gs.idsNachtragen();
+    assert.equal(w.blatt('Belege').zeilen[0][ohneId.length], 'Id');
+    const ids = () => daten(w).map(z => z[ohneId.length]);
+    const erste = ids();
+    erste.forEach(id => assert.match(id, UUID));
+    assert.notEqual(erste[0], erste[1]);
+    assert.deepEqual(w.log(), ['Alle Spalten vorhanden.', '2 Id(s) nachgetragen, Spalte 23.']);
+
+    beleg(w, { brutto: 20 });                           // danach direkt mit Id
+    assert.match(ids()[2], UUID);
+    w.gs.idsNachtragen();
+    assert.deepEqual(ids().slice(0, 2), erste);
+    assert.equal(w.log().at(-1), '0 Id(s) nachgetragen, Spalte 23.');
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', id: erste[0] }).ok, true);
+    keineFormeln(w);
   });
 });
 
@@ -386,6 +519,16 @@ describe('Anmeldung und Sitzungen', () => {
     const zeile = w.blatt('Sessions').zeilen.find(z => z[1] === 'mia@x.ch');
     assert.equal(zeile[0], w.gs.tokenHash('T-MIA'));
     assert.equal(post(w, { session: 'T-MIA', action: 'stammdaten' }).ok, true);
+  });
+
+  test('Lesen per GET (alte App) gibt nichts mehr heraus', () => {
+    const w = welt();
+    beleg(w);
+    const key = daten(w)[0][sp('DedupKey')];
+    for (const action of ['stammdaten', 'meine', 'bild']) {
+      const r = json(get(w, { session: 'T-MIA', action, monat: '8', jahr: '2026', key }));
+      assert.deepEqual(r, { ok: false, error: 'anfrage' }, action);
+    }
   });
 
   test('Lesen per POST, ohne die Sperre zu belegen', () => {
