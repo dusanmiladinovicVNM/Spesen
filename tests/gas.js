@@ -80,7 +80,8 @@ class Blatt {
 /* Drive: Dateien und Ordner in Maps, IDs im Drive-Format (33 Zeichen) */
 function neueId() { return '1' + crypto.randomBytes(24).toString('base64url').slice(0, 32); }
 
-function drive() {
+/** sperre: Zustand der Skriptsperre — ein Upload unter der Sperre wird gezählt */
+function drive(sperre, zaehler) {
   const dateien = new Map(), ordner = new Map();
   const iter = arr => { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; };
 
@@ -91,13 +92,16 @@ function drive() {
       getFoldersByName: n => iter([...ordner.values()].filter(x => x._eltern === o && x.getName() === n)),
       createFolder: n => neuerOrdner(neueId(), n, o),
       createFile: blob => {
+        if (sperre.gehalten) zaehler.uploadGesperrt++;
         const fid = neueId();
         const d = {
           getId: () => fid, getName: () => blob.getName(), getMimeType: () => blob.getContentType(),
           getUrl: () => 'https://drive.google.com/file/d/' + fid + '/view?usp=drivesdk',
           getParents: () => iter([o]),
           getBlob: () => blob,
-          setSharing() {}
+          setSharing() {},
+          papierkorb: false,
+          setTrashed(v) { d.papierkorb = !!v; return d; }
         };
         dateien.set(fid, d);
         return d;
@@ -139,15 +143,27 @@ function formatDate(datum, zone, muster) {
  * Lädt Code.gs mit den gegebenen Blättern.
  * optionen.uuid: eigene Funktion für Utilities.getUuid (für feste Salts)
  * Rückgabe: gs (Funktionen aus Code.gs), konst(name) (Konstanten aus
- * Code.gs), blatt(name), drive, mails, props, zaehler.
+ * Code.gs), blatt(name), drive, mails, props, zaehler, sperre.
  */
 function laden(blaetter, optionen = {}) {
   const sheets = {};
   for (const [name, zeilen] of Object.entries(blaetter)) sheets[name] = new Blatt(zeilen);
 
   const props = {}, cache = {}, mails = [], konsole = [];
-  const zaehler = { openById: 0, sperren: 0, digest: 0 };
-  const dr = drive();
+  const zaehler = { openById: 0, sperren: 0, digest: 0, digestGesperrt: 0, uploadGesperrt: 0 };
+  // besetzt: tryLock scheitert; beimSperren: läuft einmal, bevor die Sperre
+  // vergeben wird — so lässt sich eine gleichzeitige Anfrage nachstellen
+  const sperre = { gehalten: false, besetzt: false, beimSperren: null };
+  const sperren = () => {
+    zaehler.sperren++;
+    const f = sperre.beimSperren;
+    sperre.beimSperren = null;
+    if (f) f();
+    if (sperre.besetzt) return false;
+    sperre.gehalten = true;
+    return true;
+  };
+  const dr = drive(sperre, zaehler);
 
   const ctx = {
     console: {   // Code.gs protokolliert Fehler; im Test mitschreiben statt ausgeben
@@ -171,14 +187,21 @@ function laden(blaetter, optionen = {}) {
       getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
     CacheService: { getScriptCache: () => ({
       get: k => cache[k] || null, put: (k, v) => { cache[k] = String(v); }, remove: k => { delete cache[k]; } }) },
-    LockService: { getScriptLock: () => ({ waitLock() { zaehler.sperren++; }, releaseLock() {} }) },
+    LockService: { getScriptLock: () => ({
+      waitLock() { if (!sperren()) throw new Error('Sperre besetzt'); },
+      tryLock()  { return sperren(); },
+      releaseLock() { sperre.gehalten = false; } }) },
     Logger: { log: m => (ctx.__log = (ctx.__log || []).concat(String(m))) },
     MailApp: { sendEmail: m => mails.push(m) },
     DriveApp: dr.dienst,
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
       getUuid: optionen.uuid || (() => crypto.randomUUID()),
-      computeDigest: (alg, s) => { zaehler.digest++; return [...crypto.createHash('sha256').update(String(s), 'utf8').digest()]; },
+      computeDigest: (alg, s) => {
+        zaehler.digest++;
+        if (sperre.gehalten) zaehler.digestGesperrt++;
+        return [...crypto.createHash('sha256').update(String(s), 'utf8').digest()];
+      },
       computeHmacSha256Signature: (v, k) => [...crypto.createHmac('sha256', String(k)).update(String(v)).digest()],
       base64Encode: x => Buffer.from(bytes(x)).toString('base64'),
       base64EncodeWebSafe: x => Buffer.from(bytes(x)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
@@ -196,7 +219,7 @@ function laden(blaetter, optionen = {}) {
   dr.wurzel(konst('BILD_ORDNER'));   // Wurzelordner wie in Code.gs eingestellt
 
   return { gs: ctx, konst, ausfuehren, blatt: n => sheets[n], loeschen: n => { delete sheets[n]; },
-           drive: dr, mails, props, cache, zaehler, konsole, log: () => ctx.__log || [] };
+           drive: dr, mails, props, cache, zaehler, sperre, konsole, log: () => ctx.__log || [] };
 }
 
 /** JSON aus einer ContentService-Antwort */

@@ -50,6 +50,10 @@ const ABSENDER     = 'Dusan Miladinovic';
 const ANTWORT_MAIL = 'dmi@yepp.ch';
 const KONTAKT_TEL  = '+41 44 542 42 12';
 
+/* MWSt-Sätze, solange "Parameter" keinen Eintrag MwstSaetze hat.
+   Neue Sätze trägt man dort ein (mit GueltigAb), nicht hier. */
+const MWST_SAETZE = '0; 2.6; 3.8; 8.1';
+
 const SESSION_TAGE = 60;
 const SPERRE_MIN   = 15;
 const MAX_FEHLER   = 5;
@@ -341,6 +345,39 @@ function kmSaetze() {
     .sort((a, b) => a.ab < b.ab ? -1 : 1);
 }
 
+/** "0; 2,6; 3.8; 8.1" → [0, 2.6, 3.8, 8.1]. Ohne gültige Zahl die Vorgabe. */
+function mwstLesen(wert) {
+  const zahlen = w => String(w == null ? '' : w).split(';')
+    .map(x => x.trim().replace(',', '.')).filter(x => x !== '').map(Number)
+    .filter((x, i, a) => isFinite(x) && x >= 0 && x < 100 && a.indexOf(x) === i)
+    .sort((a, b) => a - b);
+  const s = zahlen(wert);
+  return s.length ? s : zahlen(MWST_SAETZE);
+}
+
+/** Erlaubte MWSt-Sätze zum Belegdatum — Schluessel MwstSaetze in
+ *  "Parameter", gewählt wie bei KmSatz über GueltigAb. */
+function mwstSaetze(datum) {
+  return mwstLesen(parameter('MwstSaetze', datum));
+}
+
+/** Alle Einträge für die App. Gibt es keinen ohne GueltigAb, kommt die
+ *  Vorgabe als solcher dazu — so wählt die App zu jedem Datum dieselben
+ *  Sätze wie mwstSaetze() auf dem Server. */
+function mwstListen() {
+  const rows = sheet('Parameter').getDataRange().getValues();
+  const head = kopf(rows);
+  rows.shift();
+  const iS = head.indexOf('Schluessel');
+  const iW = head.indexOf('Wert');
+  const iA = head.indexOf('GueltigAb');
+  const liste = iS < 0 || iW < 0 ? [] : rows
+    .filter(r => String(r[iS]).trim() === 'MwstSaetze')
+    .map(r => ({ ab: iA >= 0 ? String(r[iA] || '').trim() : '', saetze: mwstLesen(r[iW]) }));
+  if (!liste.some(x => x.ab === '')) liste.push({ ab: '', saetze: mwstLesen(null) });
+  return liste;
+}
+
 
 /** Unterordner holen oder anlegen. */
 function unterOrdner(eltern, name) {
@@ -371,7 +408,10 @@ function benutzerOrdner(u) {
   return ordner;
 }
 
-/** Zielordner inklusive Monatsunterordner. */
+/** Zielordner inklusive Monatsunterordner. Läuft ohne Sperre: zwei
+ *  gleichzeitige erste Fotos derselben Person im Monat können zwei
+ *  gleichnamige Ordner anlegen — unschön, aber ohne Folgen, die Links
+ *  zeigen auf die Datei, nicht auf den Ordner. */
 function zielOrdner(u, datum) {
   const persoenlich = benutzerOrdner(u);
   if (!BILD_MONATSORDNER) return persoenlich;
@@ -439,27 +479,29 @@ function fremderFehlversuch(email) {
  *  Konto inaktiv ist. Auch die Rechenzeit ist gleich (hashPass läuft immer). */
 function login(b) {
   const u = benutzerZeile(b.email);
-  if (!u) {
-    hashPass(String(b.passwort || ''), 'kein-konto');
-    return out({ ok: false, error: fremderFehlversuch(b.email) });
-  }
+  // hashPass ist der langsame Teil: ohne Sperre, damit niemand darauf
+  // wartet, und immer — mit und ohne Konto, gesperrt oder nicht
+  const pwOk = hashPass(String(b.passwort || ''), u ? u.d[3] : 'kein-konto') ===
+               (u && u.d[2] ? u.d[2] : null);
+  return mitSperre(() => u
+    ? loginSchreiben(u, pwOk)
+    : out({ ok: false, error: fremderFehlversuch(b.email) }));
+}
 
-  const sh = sheet('Benutzer');
-  const email       = u.d[0];
-  const name        = u.d[1];
-  const hash        = u.d[2];
-  const salt        = u.d[3];
-  const aktiv       = u.d[4];
-  const fehler      = u.d[5];
+/** Schreibender Teil der Anmeldung, unter der Sperre. */
+function loginSchreiben(u, pwOk) {
+  const sh    = sheet('Benutzer');
+  const email = u.d[0];
+  const name  = u.d[1];
+  const aktiv = u.d[4];
   const gesperrtBis = u.d[6];
 
   if (gesperrtBis && new Date(gesperrtBis) > new Date()) {
     return out({ ok: false, error: 'gesperrt' });
   }
-
-  const pwOk = hashPass(String(b.passwort || ''), salt) === hash;
-  if (!hash || !pwOk) {
-    const n = Number(fehler || 0) + 1;
+  if (!pwOk) {
+    // Zähler erst hier lesen, sonst ginge ein gleichzeitiger Fehlversuch verloren
+    const n = Number(sh.getRange(u.zeile, 6).getValue() || 0) + 1;
     if (n >= MAX_FEHLER) {
       sh.getRange(u.zeile, 6).setValue(0);
       sh.getRange(u.zeile, 7).setValue(new Date(Date.now() + SPERRE_MIN * 60000));
@@ -610,7 +652,8 @@ function lesen(p, u) {
       ok: true,
       konten:        aktiveListe('Konten'),
       kostenstellen: aktiveListe('Kostenstellen'),
-      kmSaetze:      kmSaetze()
+      kmSaetze:      kmSaetze(),
+      mwstSaetze:    mwstListen()
     });
   }
 
@@ -790,8 +833,6 @@ function doPost(e) {
     }
   }
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
   try {
     if (b.action === 'login') return login(b);
 
@@ -801,28 +842,43 @@ function doPost(e) {
     // Alle admin_* Aktionen laufen durch dieselbe Rollenprüfung
     if (String(b.action || '').indexOf('admin_') === 0) {
       if (u.rolle !== 'admin') return out({ ok: false, error: 'keine Berechtigung' });
-      if (b.action === 'admin_liste') return adminListe(u);
-      if (b.action === 'admin_neu')   return adminNeu(b, u);
-      if (b.action === 'admin_aktiv') return adminAktiv(b, u);
-      if (b.action === 'admin_reset') return adminReset(b, u);
-      if (b.action === 'admin_rolle') return adminRolle(b, u);
-      if (b.action === 'admin_stamm')         return adminStamm();
-      if (b.action === 'admin_stamm_neu')     return adminStammNeu(b);
-      if (b.action === 'admin_stamm_aendern') return adminStammAendern(b);
-      if (b.action === 'admin_stamm_aktiv')   return adminStammAktiv(b);
-      return out({ ok: false, error: 'unbekannte Aktion' });
+      return mitSperre(() => admin(b, u));
     }
 
-    if (b.action === 'passwort') return passwortAendern(b, u);
-    if (b.action === 'storno')   return storno(b, u);
-    if (b.art    === 'fahrt')    return fahrt(b, u);
-    return beleg(b, u);
+    if (b.action === 'passwort') return mitSperre(() => passwortAendern(b, u));
+    if (b.action === 'storno')   return mitSperre(() => storno(b, u));
+    if (b.art    === 'fahrt')    return mitSperre(() => fahrt(b, u));
+    return beleg(b, u);          // sperrt selbst, erst nach dem Foto-Upload
 
   } catch (err) {
     return serverFehler(err);
+  }
+}
+
+/** Schreiben unter der Skriptsperre, damit zwei Anfragen nicht in dieselbe
+ *  Zeile schreiben. Langsames (Foto, Passwort-Hash) läuft vorher, ohne sie.
+ *  Ist sie nach 30 s nicht frei: "besetzt" — die App bittet, nochmals zu senden. */
+function mitSperre(f) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return out({ ok: false, error: 'besetzt' });
+  try {
+    return f();
   } finally {
     lock.releaseLock();
   }
+}
+
+function admin(b, u) {
+  if (b.action === 'admin_liste') return adminListe(u);
+  if (b.action === 'admin_neu')   return adminNeu(b, u);
+  if (b.action === 'admin_aktiv') return adminAktiv(b, u);
+  if (b.action === 'admin_reset') return adminReset(b, u);
+  if (b.action === 'admin_rolle') return adminRolle(b, u);
+  if (b.action === 'admin_stamm')         return adminStamm();
+  if (b.action === 'admin_stamm_neu')     return adminStammNeu(b);
+  if (b.action === 'admin_stamm_aendern') return adminStammAendern(b);
+  if (b.action === 'admin_stamm_aktiv')   return adminStammAktiv(b);
+  return out({ ok: false, error: 'unbekannte Aktion' });
 }
 
 /** Technische Details ins Protokoll (Apps Script → Ausführungen),
@@ -853,7 +909,7 @@ function beleg(b, u) {
 
   // Number('') wäre 0 — ein fehlender Satz darf nicht als 0 % durchgehen
   const satz  = Number(b.mwstSatz);                       // 8.1
-  if (b.mwstSatz === '' || b.mwstSatz == null || !isFinite(satz) || satz < 0 || satz >= 100) {
+  if (b.mwstSatz === '' || b.mwstSatz == null || mwstSaetze(b.datum).indexOf(satz) < 0) {
     return out({ ok: false, error: 'mwst' });
   }
   if (String(b.bemerkung || '').trim() === '')        return out({ ok: false, error: 'bemerkung' });
@@ -871,55 +927,81 @@ function beleg(b, u) {
   const key = dedupKey(u.email, b.datum, brutto, b.belegNr, b.suffix);
 
   const sh   = sheet('Belege');
-  const rows = sh.getDataRange().getValues();
-  const head = kopf(rows);
-  rows.shift();
+  const head = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
   const spalteFehlt = belegeFehlend(head);   // vor dem Foto, sonst bliebe es verwaist
   if (spalteFehlt) return out({ ok: false, error: spalteFehlt });
-  const iKey = head.indexOf('DedupKey');
-  const iSto = head.indexOf('Storniert');
+  // Vorprüfung ohne Sperre: ein erkanntes Duplikat kostet keinen Upload
+  if (istDuplikat(sh, head, key)) return out({ ok: false, error: 'duplikat' });
 
-  const dup = rows.some(r =>
-    String(r[iKey]).trim() === key && String(r[iSto]).toLowerCase() !== 'true');
-  if (dup) return out({ ok: false, error: 'duplikat' });
-
+  // Foto vor der Sperre — Drive ist der langsamste Schritt, andere
+  // sollen nicht darauf warten
   let bildUrl = '';
-  if (b.bild) {
-    try {
-      bildUrl = bildSpeichern(b.bild, u, b.datum, brutto, b.belegNr);
-    } catch (err) {
-      console.error('bildSpeichern: ' + (err && err.stack ? err.stack : err));
-      return out({ ok: false, error: 'bild' });
-    }
+  try {
+    bildUrl = bildSpeichern(b.bild, u, b.datum, brutto, b.belegNr);
+  } catch (err) {
+    console.error('bildSpeichern: ' + (err && err.stack ? err.stack : err));
+    return out({ ok: false, error: 'bild' });
   }
 
-  belegeSchreiben(sh, sh.getLastRow() + 1, head, {
-    Zeitstempel: new Date(),
-    Mitarbeiter: u.name,             // ← aus der Sitzung
-    Email:       u.email,            // ← aus der Sitzung
-    BelegNr:     b.belegNr || '',
-    Datum:       String(b.datum),    // yyyy-mm-dd als Text, keine Zeitzone
-    Monat:       Number(b.monat),
-    Jahr:        Number(b.jahr),
-    Brutto:      brutto,
-    MwstSatz:    satz / 100,         // 0.081 — Excel-Prozentformat erwartet das so
-    MwstBetrag:  mwst,
-    Netto:       netto,
-    KontoNr:     konto.nr,           // Text: führende Nullen bleiben
-    KontoBez:    konto.bez,
-    KstNr:       kst.nr,
-    KstBez:      kst.bez,
-    Bemerkung:   String(b.bemerkung),
-    DedupKey:    key,
-    Storniert:   false,
-    Art:         'Beleg',
-    KM:          '',
-    KmSatz:      '',
-    BildUrl:     bildUrl,
-    Id:          Utilities.getUuid()
-  });
+  let gespeichert = false;
+  try {
+    return mitSperre(() => {
+      // nochmals unter der Sperre: derselbe Beleg kann inzwischen
+      // gespeichert sein (zweimal getippt, zwei Geräte)
+      if (istDuplikat(sh, head, key)) return out({ ok: false, error: 'duplikat' });
+      belegeSchreiben(sh, sh.getLastRow() + 1, head, {
+        Zeitstempel: new Date(),
+        Mitarbeiter: u.name,             // ← aus der Sitzung
+        Email:       u.email,            // ← aus der Sitzung
+        BelegNr:     b.belegNr || '',
+        Datum:       String(b.datum),    // yyyy-mm-dd als Text, keine Zeitzone
+        Monat:       Number(b.monat),
+        Jahr:        Number(b.jahr),
+        Brutto:      brutto,
+        MwstSatz:    satz / 100,         // 0.081 — Excel-Prozentformat erwartet das so
+        MwstBetrag:  mwst,
+        Netto:       netto,
+        KontoNr:     konto.nr,           // Text: führende Nullen bleiben
+        KontoBez:    konto.bez,
+        KstNr:       kst.nr,
+        KstBez:      kst.bez,
+        Bemerkung:   String(b.bemerkung),
+        DedupKey:    key,
+        Storniert:   false,
+        Art:         'Beleg',
+        KM:          '',
+        KmSatz:      '',
+        BildUrl:     bildUrl,
+        Id:          Utilities.getUuid()
+      });
+      gespeichert = true;
+      return out({ ok: true, mwst: mwst, netto: netto, bild: !!bildUrl });
+    });
+  } finally {
+    if (!gespeichert) fotoVerwerfen(bildUrl);   // gehört zu keiner Zeile
+  }
+}
 
-  return out({ ok: true, mwst: mwst, netto: netto, bild: !!bildUrl });
+/** Gibt es den Schlüssel in einer nicht stornierten Zeile?
+ *  Liest nur die zwei nötigen Spalten. */
+function istDuplikat(sh, head, key) {
+  const n = sh.getLastRow() - 1;
+  if (n < 1) return false;
+  const spalte = name => sh.getRange(2, head.indexOf(name) + 1, n, 1).getValues();
+  const keys = spalte('DedupKey'), sto = spalte('Storniert');
+  return keys.some((z, i) =>
+    String(z[0]).trim() === key && String(sto[i][0]).toLowerCase() !== 'true');
+}
+
+/** Foto in den Papierkorb (30 Tage wiederherstellbar). */
+function fotoVerwerfen(bildUrl) {
+  const treffer = String(bildUrl || '').match(/[-\w]{25,}/);
+  if (!treffer) return;
+  try {
+    DriveApp.getFileById(treffer[0]).setTrashed(true);
+  } catch (err) {
+    console.error('fotoVerwerfen: ' + err);
+  }
 }
 
 /** Kilometerentschädigung: ein Eintrag pro Person und Tag.

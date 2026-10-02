@@ -93,6 +93,17 @@ U `Parameter` upiši najmanje dva reda:
 koji važi na datum belega. `KmKonto` je konto na koji se knjiže kilometri;
 mora postojati u listu `Konten`.
 
+**MWSt stope** (opciono) — red `MwstSaetze`, stope odvojene sa `;`:
+
+| `Schluessel` | `Wert` | `GueltigAb` |
+|---|---|---|
+| `MwstSaetze` | `0; 2.6; 3.8; 8.1` | `2024-01-01` |
+
+Bez tog reda važe upravo te stope. Kad se stope promene, dodaj novi red sa
+novim `GueltigAb` — stari ostaje za račune od pre promene. Aplikacija nudi
+stope koje važe na datum belega, unapred izabrana je najviša (Normalsatz),
+a server odbija stopu koje tog dana nema. Zarez ili tačka, oba rade.
+
 **Kolone `Datum` i `GueltigAb` formatiraj kao običan tekst** —
 `Format → Zahl → Nur Text`. Inače Sheets tumači `2026-07-31` kao datum
 i vraća pomak vremenske zone.
