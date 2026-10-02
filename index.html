@@ -672,9 +672,21 @@ async function get(params) {
   return res.json();
 }
 
+/** Leert alle Eingaben — auf einem geteilten Gerät soll die nächste
+ *  Person weder Konto und Kostenstelle noch Text oder Foto übernehmen. */
+function formLeeren() {
+  ['fm-belegnr', 'fm-brutto', 'fm-km', 'fm-bemerkung', 'fm-konto', 'fm-kst']
+    .forEach(id => { $(id).value = ''; });
+  $('fm-vorschau').textContent = '';
+  fotoWeg();
+  S.suffix = 0;
+  setzeArt('beleg');
+}
+
 function sessionWeg() {
   localStorage.clear();
   S.session = '';
+  formLeeren();
   toast('Ihre Sitzung ist abgelaufen. Bitte melden Sie sich erneut an.', 'err');
   zeigeScreen('scr-login');
 }
@@ -707,7 +719,7 @@ async function anmelden() {
       localStorage.setItem('session', r.session);
       localStorage.setItem('name', r.name);
       localStorage.setItem('rolle', S.rolle);
-      localStorage.setItem('email', r.email || email);
+      localStorage.setItem('email', String(r.email || email).trim().toLowerCase());
       $('lg-pass').value = '';
       if (r.pwGeaendert === false) { zeigePasswort(true); return; }
       await start();
@@ -768,6 +780,7 @@ async function passwortSpeichern() {
       const email = localStorage.getItem('email');
       localStorage.clear();
       S.session = ''; S.altPass = '';
+      formLeeren();
       $('lg-email').value = email || $('lg-email').value;
       zeigeScreen('scr-login');
       toast('Passwort geändert. Bitte neu anmelden.', 'ok');
@@ -791,6 +804,7 @@ async function passwortSpeichern() {
 function abmelden() {
   localStorage.clear();
   S.session = '';
+  formLeeren();
   $('lg-email').value = '';
   zeigeScreen('scr-login');
 }
@@ -923,6 +937,16 @@ function vorschau() {
 
 /* ---------- snimanje ---------- */
 
+/** Server meldet ein inaktives Konto oder eine inaktive Kostenstelle:
+ *  Listen neu laden und erst dann sagen, ob das geklappt hat. */
+async function stammVeraltet() {
+  let neu = false;
+  try { neu = await stammdatenLaden(); } catch (e) { /* unten gemeldet */ }
+  toast(neu
+    ? 'Konto oder Kostenstelle ist nicht mehr aktiv. Die Liste ist aktualisiert — bitte neu wählen.'
+    : FEHLER_TEXT.stamm, 'err');
+}
+
 /* Fehlercodes des Servers (beleg/fahrt) in Klartext */
 const FEHLER_TEXT = {
   betrag:  'Betrag fehlt oder ist ungültig.',
@@ -933,7 +957,7 @@ const FEHLER_TEXT = {
   foto:    'Beleg-Foto ist erforderlich.',
   bemerkung: 'Bemerkung ist erforderlich.',
   zweck:   'Strecke / Zweck ist erforderlich.',
-  stamm:   'Konto oder Kostenstelle ist nicht mehr aktiv. Die Liste wurde aktualisiert — bitte neu wählen.',
+  stamm:   'Konto oder Kostenstelle ist nicht mehr aktiv. Bitte die App neu laden.',
   km:      'Kilometer fehlen.'
 };
 
@@ -954,9 +978,6 @@ async function speichern(ersetzen) {
   if (!S.bild) { toast('Beleg-Foto ist erforderlich.', 'err'); return; }
   if (!$('fm-bemerkung').value.trim()) { toast('Bemerkung ist erforderlich.', 'err'); return; }
 
-  const kontoOpt = $('fm-konto').selectedOptions[0].textContent;
-  const kstOpt   = $('fm-kst').selectedOptions[0].textContent;
-
   const daten = {
     session:   S.session,
     belegNr:   $('fm-belegnr').value.trim(),
@@ -966,9 +987,7 @@ async function speichern(ersetzen) {
     brutto:    brutto,
     mwstSatz:  parseFloat($('fm-mwst').value),
     kontoNr:   $('fm-konto').value,
-    kontoBez:  kontoOpt.split(' · ').slice(1).join(' · '),
     kstNr:     $('fm-kst').value,
-    kstBez:    kstOpt.split(' · ').slice(1).join(' · '),
     bemerkung: $('fm-bemerkung').value.trim(),
     suffix:    S.suffix,
     bild:      S.bild || ''
@@ -990,8 +1009,7 @@ async function speichern(ersetzen) {
     } else if (r.error === 'duplikat') {
       $('dlg-dup').classList.add('zeigen');
     } else if (r.error === 'stamm') {
-      toast(FEHLER_TEXT.stamm, 'err');
-      stammdatenLaden().catch(() => {});
+      await stammVeraltet();
     } else {
       toast(FEHLER_TEXT[r.error] || 'Speichern nicht möglich: ' + (r.error || 'unbekannt'), 'err');
     }
@@ -1014,8 +1032,6 @@ async function speichernFahrt(ersetzen) {
   if (!$('fm-kst').value)   { toast('Kostenstelle ist erforderlich.', 'err'); return; }
   if (!$('fm-bemerkung').value.trim()) { toast('Strecke / Zweck ist erforderlich.', 'err'); return; }
 
-  const kstOpt = $('fm-kst').selectedOptions[0].textContent;
-
   S.laeuft = true;
   const btn = $('fm-speichern');
   btn.disabled = true;
@@ -1030,7 +1046,6 @@ async function speichernFahrt(ersetzen) {
       monat:     $('fm-monat').value,
       jahr:      $('fm-jahr').value,
       kstNr:     $('fm-kst').value,
-      kstBez:    kstOpt.split(' · ').slice(1).join(' · '),
       bemerkung: $('fm-bemerkung').value.trim(),
       ersetzen:  !!ersetzen
     });
@@ -1048,8 +1063,7 @@ async function speichernFahrt(ersetzen) {
         'Möchten Sie den Eintrag durch ' + km + ' km ersetzen?';
       $('dlg-fahrt').classList.add('zeigen');
     } else if (r.error === 'stamm') {
-      toast(FEHLER_TEXT.stamm, 'err');
-      stammdatenLaden().catch(() => {});
+      await stammVeraltet();
     } else {
       toast({
         ...FEHLER_TEXT,
@@ -1247,13 +1261,16 @@ async function adminLaden() {
       $('adm-liste').innerHTML = '<div class="leer">' + esc(r.error) + '</div>';
       return;
     }
-    adminZeichnen(r.benutzer || []);
+    adminZeichnen(r.benutzer || [], r.ich);
   } catch (e) {
     $('adm-liste').innerHTML = '<div class="leer">Keine Verbindung.</div>';
   }
 }
 
-function adminZeichnen(liste) {
+/** ich: eigene Adresse vom Server — auch für Sitzungen, die vor dem
+ *  Speichern der Adresse im Browser angemeldet wurden. */
+function adminZeichnen(liste, ich) {
+  ich = String(ich || localStorage.getItem('email') || '').trim().toLowerCase();
   const el = $('adm-liste');
   if (!liste.length) { el.innerHTML = '<div class="leer">Keine Benutzer.</div>'; return; }
 
@@ -1264,7 +1281,7 @@ function adminZeichnen(liste) {
       (b.pwGeaendert === false ? '<span class="marke neu">noch nicht angemeldet</span>' : '') +
       (b.gesperrt         ? '<span class="marke aus">gesperrt</span>' : '');
 
-    const selbst = b.email.toLowerCase() === String(localStorage.getItem('email') || '').toLowerCase();
+    const selbst = String(b.email).trim().toLowerCase() === ich;
 
     return `
       <div class="nutzer">

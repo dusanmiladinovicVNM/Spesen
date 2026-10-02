@@ -22,3 +22,8 @@ test('index.html und foto.html sprechen dieselbe Web-App an', () => {
   const url = /https:\/\/script\.google\.com\/macros\/s\/[-\w]+\/exec/;
   assert.equal(lies('index.html').match(url)[0], lies('foto.html').match(url)[0]);
 });
+
+test('GitHub Action läuft nur mit Leserechten', () => {
+  const yml = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'tests.yml'), 'utf8');
+  assert.match(yml, /^permissions:\s*\n\s+contents: read\s*$/m);
+});

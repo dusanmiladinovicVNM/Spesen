@@ -1,7 +1,16 @@
 'use strict';
-/* Minimaler Nachbau der Apps-Script-Dienste, damit Code.gs unverändert
-   unter Node läuft. Nachgebaut ist nur, was Code.gs tatsächlich aufruft.
-   Blätter sind Arrays von Zeilen; Zeile 1 ist die Kopfzeile wie in Sheets. */
+/* Nachbau der Apps-Script-Dienste, damit Code.gs unverändert unter Node
+   läuft. Nachgebaut ist nur, was Code.gs aufruft.
+
+   Das Blatt deutet Eingaben wie Sheets um — sonst könnten die Tests die
+   Fehler nicht sehen, gegen die Code.gs sich schützt:
+     - "'…"            Apostroph: Text, das Apostroph ist nicht Teil des Werts
+     - "=…"            Formel, vorsichtshalber auch in Textzellen (@)
+     - "+…" "-…" "@…"  Formel, ausser in Textzellen (@)
+     - "0700", "12.5"  Zahl, ausser in Textzellen (@)
+   Eine Formel liest sich wie in Sheets als Fehlerwert (#ERROR!) und
+   wird in blatt.formeln gezählt. appendRow und setValues ohne Format
+   schreiben in Zellen mit automatischem Format. */
 
 const fs     = require('fs');
 const path   = require('path');
@@ -10,44 +19,68 @@ const crypto = require('crypto');
 
 const CODE = path.join(__dirname, '..', 'apps-script', 'Code.gs');
 
+function eingabe(v, format) {
+  if (typeof v !== 'string') return { wert: v };
+  if (v.charAt(0) === "'") return { wert: v.slice(1) };
+  if (v.charAt(0) === '=') return { formel: v };
+  if (format === '@') return { wert: v };
+  if (/^[+-]?\d+(\.\d+)?$/.test(v.trim())) return { wert: Number(v) };
+  if (/^[+\-@]/.test(v)) return { formel: v };
+  return { wert: v };
+}
+
 class Blatt {
-  constructor(zeilen) { this.zeilen = zeilen.map(z => z.slice()); this.formate = {}; }
-  getDataRange() { return { getValues: () => this.zeilen.map(z => z.slice()) }; }
+  constructor(zeilen) {
+    this.zeilen  = zeilen.map(z => z.slice());   // gelesene Werte
+    this.formate = {};                           // "z:s" → "@"
+    this.formeln = [];                           // geschriebene Formeln
+  }
+  breite() { return Math.max(0, ...this.zeilen.map(z => z.length)); }
+  zelle(r, c) { const z = this.zeilen[r - 1]; return z && c <= z.length && z[c - 1] !== undefined ? z[c - 1] : ''; }
+  schreiben(r, c, v) {
+    while (this.zeilen.length < r) this.zeilen.push([]);
+    const e = eingabe(v, this.formate[r + ':' + c]);
+    if (e.formel !== undefined) this.formeln.push({ zeile: r, spalte: c, formel: e.formel });
+    this.zeilen[r - 1][c - 1] = e.formel !== undefined ? '#ERROR!' : e.wert;
+  }
+
+  getDataRange() {
+    // wie Sheets: rechteckig, kurze Zeilen mit '' aufgefüllt
+    const b = this.breite();
+    return { getValues: () => this.zeilen.map(z => Array.from({ length: b }, (_, i) => z[i] === undefined ? '' : z[i])) };
+  }
   getLastRow() { return this.zeilen.length; }
-  getLastColumn() { return Math.max(0, ...this.zeilen.map(z => z.length)); }
+  getLastColumn() { return this.breite(); }
   getRange(r, c, nr = 1, nc = 1) {
     const b = this;
     const bereich = {
       getValues() {
-        const o = [];
-        for (let i = 0; i < nr; i++) {
-          const z = [];
-          for (let j = 0; j < nc; j++) z.push((b.zeilen[r - 1 + i] || [])[c - 1 + j] ?? '');
-          o.push(z);
-        }
-        return o;
+        return Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => b.zelle(r + i, c + j)));
       },
-      getValue() { return bereich.getValues()[0][0]; },
-      setValues(werte) {
-        werte.forEach((z, i) => z.forEach((x, j) => {
-          while (b.zeilen.length < r + i) b.zeilen.push([]);
-          b.zeilen[r - 1 + i][c - 1 + j] = x;
+      getValue() { return b.zelle(r, c); },
+      getFormulas() {
+        return Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => {
+          const f = b.formeln.filter(x => x.zeile === r + i && x.spalte === c + j).pop();
+          return f ? f.formel : '';
         }));
-        return bereich;
       },
-      setValue(x) { return bereich.setValues([[x]]); },
-      setNumberFormat(f) { b.formate[r + ':' + c] = f; return bereich; }
+      setValues(werte) { werte.forEach((z, i) => z.forEach((x, j) => b.schreiben(r + i, c + j, x))); return bereich; },
+      setValue(x) { b.schreiben(r, c, x); return bereich; },
+      setNumberFormat(f) {
+        for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) b.formate[(r + i) + ':' + (c + j)] = f;
+        return bereich;
+      }
     };
     return bereich;
   }
-  appendRow(z) { this.zeilen.push(z.slice()); return this; }
+  appendRow(z) { const r = this.zeilen.length + 1; z.forEach((x, j) => this.schreiben(r, j + 1, x)); return this; }
   deleteRow(r) { this.zeilen.splice(r - 1, 1); }
 }
 
 /* Drive: Dateien und Ordner in Maps, IDs im Drive-Format (33 Zeichen) */
 function neueId() { return '1' + crypto.randomBytes(24).toString('base64url').slice(0, 32); }
 
-function drive(wurzelId) {
+function drive() {
   const dateien = new Map(), ordner = new Map();
   const iter = arr => { let i = 0; return { hasNext: () => i < arr.length, next: () => arr[i++] }; };
 
@@ -74,10 +107,10 @@ function drive(wurzelId) {
     ordner.set(id, o);
     return o;
   }
-  neuerOrdner(wurzelId, 'Belegfotos', null);
 
   return {
     dateien, ordner,
+    wurzel: id => neuerOrdner(id, 'Belegfotos', null),
     dienst: {
       getFileById: id => { if (!dateien.has(id)) throw new Error('nicht gefunden'); return dateien.get(id); },
       getFolderById: id => { if (!ordner.has(id)) throw new Error('nicht gefunden'); return ordner.get(id); },
@@ -104,18 +137,27 @@ function formatDate(datum, zone, muster) {
 
 /**
  * Lädt Code.gs mit den gegebenen Blättern.
- * Rückgabe: gs (alle Funktionen aus Code.gs), blatt(name), drive, mails, props.
+ * optionen.uuid: eigene Funktion für Utilities.getUuid (für feste Salts)
+ * Rückgabe: gs (Funktionen aus Code.gs), konst(name) (Konstanten aus
+ * Code.gs), blatt(name), drive, mails, props, zaehler.
  */
-function laden(blaetter) {
+function laden(blaetter, optionen = {}) {
   const sheets = {};
   for (const [name, zeilen] of Object.entries(blaetter)) sheets[name] = new Blatt(zeilen);
 
-  const props = {}, cache = {}, mails = [];
-  const dr = drive('1F7Y7DKMu9s5JEL67w5Ywy7p88vpMRTCM');   // BILD_ORDNER aus Code.gs
+  const props = {}, cache = {}, mails = [], zaehler = { openById: 0 };
+  const dr = drive();
 
   const ctx = {
     console,
-    SpreadsheetApp: { openById: () => ({ getSheetByName: n => sheets[n] || null }) },
+    SpreadsheetApp: { openById: () => {
+      zaehler.openById++;
+      return {
+        getSheetByName: n => sheets[n] || null,
+        insertSheet: n => (sheets[n] = new Blatt([])),
+        deleteSheet: sh => { for (const n in sheets) if (sheets[n] === sh) delete sheets[n]; }
+      };
+    } },
     ContentService: {
       createTextOutput: t => ({ text: t, setMimeType() { return this; }, getContent() { return t; } }),
       MimeType: { JSON: 'json', CSV: 'csv', TEXT: 'text' }
@@ -124,12 +166,12 @@ function laden(blaetter) {
       getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
     CacheService: { getScriptCache: () => ({ get: k => cache[k] || null, put: (k, v) => { cache[k] = v; } }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
-    Logger: { log() {} },
+    Logger: { log: m => (ctx.__log = (ctx.__log || []).concat(String(m))) },
     MailApp: { sendEmail: m => mails.push(m) },
     DriveApp: dr.dienst,
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
-      getUuid: () => crypto.randomUUID(),
+      getUuid: optionen.uuid || (() => crypto.randomUUID()),
       computeDigest: (alg, s) => [...crypto.createHash('sha256').update(String(s), 'utf8').digest()],
       computeHmacSha256Signature: (v, k) => [...crypto.createHmac('sha256', String(k)).update(String(v)).digest()],
       base64Encode: x => Buffer.from(bytes(x)).toString('base64'),
@@ -143,10 +185,13 @@ function laden(blaetter) {
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(CODE, 'utf8'), ctx, { filename: 'Code.gs' });
 
-  return { gs: ctx, blatt: n => sheets[n], drive: dr, mails, props };
+  const konst = name => vm.runInContext(name, ctx);
+  dr.wurzel(konst('BILD_ORDNER'));   // Wurzelordner wie in Code.gs eingestellt
+
+  return { gs: ctx, konst, blatt: n => sheets[n], drive: dr, mails, props, zaehler, log: () => ctx.__log || [] };
 }
 
 /** JSON aus einer ContentService-Antwort */
 const json = antwort => JSON.parse(antwort.getContent());
 
-module.exports = { laden, json };
+module.exports = { laden, json, eingabe };

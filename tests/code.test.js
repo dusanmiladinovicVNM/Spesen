@@ -12,7 +12,7 @@ const BENUTZER = ['Email', 'Name', 'PassHash', 'Salt', 'Aktiv', 'Fehler', 'Gespe
   'LetzterLogin', 'OrdnerId', 'PwGeaendert', 'Rolle'];
 const sp = n => BELEGE.indexOf(n);
 
-function welt() {
+function welt(optionen) {
   const morgen = new Date(Date.now() + 86400000);
   return laden({
     Belege: [BELEGE],
@@ -27,7 +27,7 @@ function welt() {
       ['mia@x.ch', 'Mia Muster', 'h', 's', true, 0, '', '', '', true, '']],
     Sessions: [['Token', 'Email', 'GueltigBis'],
       ['T-ADMIN', 'admin@x.ch', morgen], ['T-MIA', 'mia@x.ch', morgen]]
-  });
+  }, optionen);
 }
 
 const post = (w, body) => json(w.gs.doPost({ postData: { contents: JSON.stringify(body) } }));
@@ -45,6 +45,14 @@ const FAHRT = {
 const beleg = (w, x) => post(w, Object.assign({}, BELEG, x));
 const fahrt = (w, x) => post(w, Object.assign({}, FAHRT, x));
 const daten = w => w.blatt('Belege').zeilen.slice(1);
+const keineFormeln = w => {
+  for (const n of ['Belege', 'Benutzer', 'Sessions', 'Konten', 'Kostenstellen']) {
+    assert.deepEqual(w.blatt(n).formeln, [], 'Formel in ' + n);
+  }
+};
+
+/** ein Zeichen sicher verändern (nicht zufällig gleich bleiben) */
+const anders = (s, i) => s.slice(0, i) + (s[i] === 'A' ? 'B' : 'A') + s.slice(i + 1);
 
 
 describe('Pflichtfelder', () => {
@@ -83,7 +91,9 @@ describe('Pflichtfelder', () => {
     const r = fahrt(w);
     assert.equal(r.ok, true);
     assert.equal(r.brutto, 84);
-    assert.equal(daten(w)[0][sp('Bemerkung')], '120 km à 0.70 — Zürich–Bern');
+    const z = daten(w)[0];
+    assert.equal(z[sp('Bemerkung')], '120 km à 0.70 — Zürich–Bern');
+    assert.equal(z[sp('KontoBez')], 'Fahrzeugkosten');
   });
 });
 
@@ -103,40 +113,80 @@ describe('Konto und Kostenstelle', () => {
     assert.equal(z[sp('KontoBez')], 'Reisekosten');
     assert.equal(z[sp('KstBez')], 'Allgemein');
   });
-});
 
-
-describe('Formeln in Sheets', () => {
-  test('alsText setzt ein Apostroph vor = + - @', () => {
-    const { gs } = welt();
-    assert.equal(gs.alsText('=1+1'), "'=1+1");
-    assert.equal(gs.alsText('+41 44'), "'+41 44");
-    assert.equal(gs.alsText('-5% Rabatt'), "'-5% Rabatt");
-    assert.equal(gs.alsText('@x'), "'@x");
-    assert.equal(gs.alsText('Hotel = gut'), 'Hotel = gut');
-    assert.equal(gs.alsText(''), '');
-    assert.equal(gs.alsText(null), '');
-  });
-
-  test('Freitext im Beleg wird als Text geschrieben', () => {
+  test('Nummer mit führender Null bleibt erhalten', () => {
     const w = welt();
-    beleg(w, { bemerkung: '=IMPORTXML("https://x";"//a")', belegNr: '+41' });
+    post(w, { session: 'T-ADMIN', action: 'admin_stamm_neu', liste: 'Konten', nr: '0700', bez: 'Neu' });
+    assert.equal(beleg(w, { kontoNr: '0700', belegNr: '0012' }).ok, true);
     const z = daten(w)[0];
-    assert.equal(z[sp('Bemerkung')], '\'=IMPORTXML("https://x";"//a")');
-    assert.equal(z[sp('BelegNr')], "'+41");
-  });
-
-  test('Admin: Name als Text, Mailadresse ohne Formelzeichen', () => {
-    const w = welt();
-    assert.equal(post(w, { session: 'T-ADMIN', action: 'admin_neu', email: '=x@y.ch', name: 'X', mail: false }).error,
-                 'ungültige Mailadresse');
-    assert.equal(post(w, { session: 'T-ADMIN', action: 'admin_neu', email: 'neu@y.ch', name: '=HACK()', mail: false }).ok, true);
-    assert.equal(w.blatt('Benutzer').zeilen.at(-1)[1], "'=HACK()");
+    assert.equal(z[sp('KontoNr')], '0700');
+    assert.equal(z[sp('BelegNr')], '0012');
+    assert.equal(w.blatt('Konten').zeilen.at(-1)[0], '0700');
   });
 });
 
 
-describe('Storno und Foto über den Schlüssel', () => {
+describe('Schreiben in Sheets', () => {
+  test('Freitext wird nie zur Formel und kommt unverändert zurück', () => {
+    const w = welt();
+    const texte = ['=IMPORTXML("https://x";"//a")', '+41 44', '-Taxi', '@Bahnhof'];
+    texte.forEach((t, i) => assert.equal(beleg(w, { bemerkung: t, belegNr: t, brutto: 10 + i }).ok, true, t));
+    keineFormeln(w);
+    assert.deepEqual(daten(w).map(z => z[sp('Bemerkung')]), texte);
+    assert.deepEqual(daten(w).map(z => z[sp('BelegNr')]), texte);
+  });
+
+  test('Admin: Name mit Formelzeichen, Mailadresse mit + oder - vorne', () => {
+    const w = welt();
+    for (const email of ['-info@firma.ch', '+support@firma.ch']) {
+      const r = post(w, { session: 'T-ADMIN', action: 'admin_neu', email, name: '=HACK()', mail: false });
+      assert.equal(r.ok, true, email);
+    }
+    keineFormeln(w);
+    const z = w.blatt('Benutzer').zeilen.at(-1);
+    assert.equal(z[0], '+support@firma.ch');
+    assert.equal(z[1], '=HACK()');
+  });
+
+  test('Passwort-Hash mit "+" vorne wird gespeichert und funktioniert', () => {
+    // feste Salz, damit der Hash mit "+" beginnt (gesucht für diesen Test)
+    const w = welt({ uuid: () => 'salz-plus' });
+    const NEU = 'Neues-Passwort-52';
+    assert.equal(w.gs.hashPass(NEU, 'salz-plus')[0], '+');
+
+    const ben = w.blatt('Benutzer');
+    ben.zeilen[2][2] = w.gs.hashPass('alt-passwort', 's');   // Mia
+    assert.equal(post(w, { session: 'T-MIA', action: 'passwort', alt: 'alt-passwort', neu: NEU }).ok, true);
+    keineFormeln(w);
+    assert.equal(ben.zeilen[2][2], w.gs.hashPass(NEU, 'salz-plus'));
+    assert.equal(post(w, { action: 'login', email: 'mia@x.ch', passwort: NEU }).ok, true);
+  });
+
+  test('CSV entschärft Formelzeichen für Excel', () => {
+    const w = welt();
+    beleg(w, { bemerkung: '=HYPERLINK("http://x";"Beleg")' });
+    const csv = get(w, { format: 'csv', token: w.konst('TOKEN_READ') }).getContent();
+    assert.match(csv, /"'=HYPERLINK\(""http:\/\/x"";""Beleg""\)"/);
+  });
+
+  test('Tabelle wird je Anfrage nur einmal geöffnet', () => {
+    const w = welt();
+    w.zaehler.openById = 0;
+    beleg(w);
+    assert.equal(w.zaehler.openById, 1);
+  });
+
+  test('sheetsSelbsttest meldet überall ok', () => {
+    const w = welt();
+    w.gs.sheetsSelbsttest();
+    const log = w.log();
+    assert.equal(log.length, 7);
+    assert.ok(log.every(z => z.startsWith('ok')), log.join('\n'));
+  });
+});
+
+
+describe('Storno und Foto', () => {
   function mitBelegen() {
     const w = welt();
     beleg(w, { brutto: 10, bemerkung: 'eins' });
@@ -148,18 +198,29 @@ describe('Storno und Foto über den Schlüssel', () => {
     b.zeilen = [b.zeilen[0], ...b.zeilen.slice(1).reverse()];
     return { w, liste };
   }
-  const storniert = (w, bem) =>
-    daten(w).find(z => z[sp('Bemerkung')] === bem)[sp('Storniert')] === true;
+  const zeileVon = (w, bem) => daten(w).findIndex(z => z[sp('Bemerkung')] === bem) + 2;
+  const storniert = (w, bem) => w.blatt('Belege').zeilen[zeileVon(w, bem) - 1][sp('Storniert')] === true;
 
   test('trifft nach dem Umsortieren den richtigen Beleg', () => {
     const { w, liste } = mitBelegen();
     const eins = liste.find(b => b.Bemerkung === 'eins');
-    // alte Zeilennummer zeigt jetzt auf den Beleg der Admin
-    const r = post(w, { session: 'T-MIA', action: 'storno', key: eins.DedupKey, zeile: eins._zeile });
-    assert.equal(r.ok, true);
+    // alte Zeilennummer zeigt jetzt auf einen anderen Beleg
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', key: eins.DedupKey, zeile: eins._zeile }).ok, true);
     assert.equal(storniert(w, 'eins'), true);
-    assert.equal(storniert(w, 'admin'), false);
     assert.equal(storniert(w, 'zwei'), false);
+    assert.equal(storniert(w, 'admin'), false);
+  });
+
+  test('zwei Zeilen mit gleichem Schlüssel: es trifft die angetippte', () => {
+    const w = welt();
+    beleg(w, { bemerkung: 'original' });
+    const b = w.blatt('Belege');
+    const kopie = b.zeilen[1].slice(); kopie[sp('Bemerkung')] = 'kopie';
+    b.zeilen.push(kopie);                                  // Buchhaltung kopiert die Zeile
+    const key = kopie[sp('DedupKey')];
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', key, zeile: 3 }).ok, true);
+    assert.equal(storniert(w, 'kopie'), true);
+    assert.equal(storniert(w, 'original'), false);
   });
 
   test('fremder oder schon stornierter Beleg: nicht gefunden', () => {
@@ -171,13 +232,18 @@ describe('Storno und Foto über den Schlüssel', () => {
     assert.equal(post(w, { session: 'T-MIA', action: 'storno', key: zwei.DedupKey }).error, 'nicht gefunden');
   });
 
-  test('ohne Schlüssel gilt die Zeilennummer, aber nur für eigene Belege', () => {
+  test('nur Zeilennummer (alte App): nur für Zeilen ohne Schlüssel', () => {
     const { w } = mitBelegen();
-    const zeileAdmin = daten(w).findIndex(z => z[sp('Bemerkung')] === 'admin') + 2;
-    const zeileMia   = daten(w).findIndex(z => z[sp('Bemerkung')] === 'zwei') + 2;
-    assert.equal(post(w, { session: 'T-MIA', action: 'storno', zeile: zeileAdmin }).error, 'nicht gefunden');
-    assert.equal(post(w, { session: 'T-MIA', action: 'storno', zeile: zeileMia }).ok, true);
-    assert.equal(storniert(w, 'zwei'), true);
+    // Beleg mit Schlüssel: Zeilennummer allein reicht nicht mehr
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', zeile: zeileVon(w, 'zwei') }).error, 'nicht gefunden');
+    assert.equal(storniert(w, 'zwei'), false);
+    // von Hand erfasste Zeile ohne Schlüssel
+    const b = w.blatt('Belege');
+    const alt = daten(w).find(z => z[sp('Bemerkung')] === 'eins').slice();
+    alt[sp('DedupKey')] = ''; alt[sp('Bemerkung')] = 'ohne Schlüssel';
+    b.zeilen.push(alt);
+    assert.equal(post(w, { session: 'T-MIA', action: 'storno', zeile: b.zeilen.length }).ok, true);
+    assert.equal(storniert(w, 'ohne Schlüssel'), true);
   });
 
   test('Foto über den Schlüssel nach dem Umsortieren', () => {
@@ -207,15 +273,22 @@ describe('Konten und Kostenstellen verwalten', () => {
     assert.equal(admin(w, { action: 'admin_stamm_neu', liste: 'Konten', nr: '<b>', bez: 'x' }).error, 'Nr ungültig');
     assert.equal(admin(w, { action: 'admin_stamm_neu', liste: 'Konten', nr: '7', bez: '=x' }).error, 'Bezeichnung ungültig');
     assert.equal(admin(w, { action: 'admin_stamm_neu', liste: 'Benutzer', nr: '7', bez: 'x' }).error, 'unbekannte Liste');
+    keineFormeln(w);
   });
 
   test('ändern und schützen', () => {
     const w = welt();
-    assert.equal(admin(w, { action: 'admin_stamm_aendern', liste: 'Konten', nr: '4430', bez: 'Reise', sort: '' }).ok, true);
-    assert.equal(w.blatt('Konten').zeilen[1][1], 'Reise');
+    assert.equal(admin(w, { action: 'admin_stamm_aendern', liste: 'Konten', nr: '4430', bez: '-Reise', sort: '' }).ok, true);
+    assert.equal(w.blatt('Konten').zeilen[1][1], '-Reise');
+    keineFormeln(w);
     assert.equal(admin(w, { action: 'admin_stamm_aktiv', liste: 'Konten', nr: '6210' }).error, 'Kilometerkonto');
     assert.equal(admin(w, { action: 'admin_stamm_aktiv', liste: 'Kostenstellen', nr: '821' }).aktiv, false);
     assert.equal(admin(w, { action: 'admin_stamm_aktiv', liste: 'Kostenstellen', nr: '995' }).error, 'letzter Eintrag');
+  });
+
+  test('Benutzerliste nennt die eigene Adresse', () => {
+    const w = welt();
+    assert.equal(post(w, { session: 'T-ADMIN', action: 'admin_liste' }).ich, 'admin@x.ch');
   });
 });
 
@@ -224,21 +297,21 @@ describe('Foto-Link für Excel', () => {
   test('CSV liefert BildLink auf foto.html, die Signatur öffnet genau ein Foto', () => {
     const w = welt();
     beleg(w);
-    const csv = get(w, { format: 'csv', token: 'HIER_LANGER_ZUFALLSSTRING' }).getContent().split('\n');
+    const csv = get(w, { format: 'csv', token: w.konst('TOKEN_READ') }).getContent().split('\n');
     assert.match(csv[0], /"BildUrl","BildLink"$/);
     const link = JSON.parse('[' + csv[1] + ']').pop();
-    assert.match(link, /^https:\/\/dusanmiladinovicvnm\.github\.io\/Spesen\/foto\.html\?id=[-\w]{25,}&sig=[-\w]+$/);
+    assert.ok(link.startsWith(w.konst('PWA_URL') + 'foto.html?id='), link);
 
     const q = Object.fromEntries(new URL(link).searchParams);
     const r = json(get(w, { format: 'foto', id: q.id, sig: q.sig }));
     assert.equal(r.ok, true);
     assert.match(r.name, /^Mia Muster 2026-08-04_45\.80/);
-    assert.equal(json(get(w, { format: 'foto', id: q.id, sig: 'x' + q.sig.slice(1) })).error, 'ungültig');
-    assert.equal(json(get(w, { format: 'foto', id: q.id.slice(0, -1) + 'Z', sig: q.sig })).error, 'ungültig');
+    assert.equal(json(get(w, { format: 'foto', id: q.id, sig: anders(q.sig, 0) })).error, 'ungültig');
+    assert.equal(json(get(w, { format: 'foto', id: anders(q.id, q.id.length - 1), sig: q.sig })).error, 'ungültig');
   });
 
   test('CSV ohne gültigen Token: abgelehnt', () => {
     const w = welt();
-    assert.equal(json(get(w, { format: 'csv', token: 'falsch' })).error, 'auth');
+    assert.equal(json(get(w, { format: 'csv', token: anders(w.konst('TOKEN_READ'), 0) })).error, 'auth');
   });
 });
