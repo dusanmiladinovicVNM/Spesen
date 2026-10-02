@@ -50,28 +50,30 @@ after(async () => { if (browser) await browser.close(); });
 async function oeffnen(w, optionen = {}) {
   const kontext = await browser.newContext();
   const p = await kontext.newPage();
-  const posts = [];
+  const posts = [], urls = [];
   p.on('dialog', d => d.accept());
   if (optionen.vorher) await p.addInitScript(optionen.vorher);
   await p.route(/fonts\.(googleapis|gstatic)/, r => r.abort());
   await p.route(/script\.google\.com/, async r => {
     const req = r.request();
     const u = new URL(req.url());
+    urls.push(req.url());
+    const body = req.method() === 'POST' ? JSON.parse(req.postData()) : {};
+    const aktion = body.action || u.searchParams.get('action');
+    if (optionen.stammdatenKaputt && optionen.stammdatenKaputt() && aktion === 'stammdaten') {
+      return r.fulfill({ status: 500, contentType: 'text/html', body: '<html>Fehler</html>' });
+    }
     let antwort;
     if (req.method() === 'POST') {
-      posts.push(JSON.parse(req.postData()));
+      posts.push(body);
       antwort = w.gs.doPost({ postData: { contents: req.postData() } });
     } else {
-      if (optionen.stammdatenKaputt && optionen.stammdatenKaputt() &&
-          u.searchParams.get('action') === 'stammdaten') {
-        return r.fulfill({ status: 500, contentType: 'text/html', body: '<html>Fehler</html>' });
-      }
       antwort = w.gs.doGet({ parameter: Object.fromEntries(u.searchParams) });
     }
     await r.fulfill({ status: 200, contentType: 'application/json', body: antwort.getContent() });
   });
   await p.goto(SEITE);
-  return { p, posts, schliessen: () => kontext.close() };
+  return { p, posts, urls, schliessen: () => kontext.close() };
 }
 
 async function anmelden(p, email) {
@@ -243,6 +245,46 @@ describe('App im Browser', { skip: OHNE }, () => {
     assert.ok(st.key, 'Schlüssel gesendet');
     const getroffen = b.zeilen.slice(1).find(z => z[sp('Storniert')] === true);
     assert.ok(erster.endsWith(getroffen[sp('Bemerkung')]), erster + ' / ' + getroffen[sp('Bemerkung')]);
+    await schliessen();
+  });
+
+  test('Sitzungs-Token erscheint nie in einer URL', async () => {
+    const w = welt();
+    const { p, urls, schliessen } = await oeffnen(w);
+    await anmelden(p, 'mia@x.ch');
+    await belegErfassen(p);
+    await toastNach(p, () => p.click('#fm-speichern'));
+    await p.click('#fm-liste');
+    await p.waitForSelector('#lst-liste .eintrag');
+    await p.click('#lst-liste .foto-auf');
+    await p.waitForSelector('#bild-gross:not([hidden])');
+    const token = await p.evaluate(() => localStorage.getItem('session'));
+    assert.ok(token && token.length > 40, 'Token vorhanden');
+    assert.ok(urls.length >= 5, 'Anfragen beobachtet');
+    assert.deepEqual(urls.filter(u => u.includes('session=') || u.includes(token)), []);
+    // in Sessions steht nicht das Token, sondern sein Hash
+    assert.equal(w.blatt('Sessions').zeilen.some(z => z[0] === token), false);
+    await schliessen();
+  });
+
+  test('Logo und Zeichen werden gezeichnet', async () => {
+    const w = welt();
+    const { p, schliessen } = await oeffnen(w);
+    const flaeche = sel => p.$eval(sel, e => { const b = e.getBBox(); return b.width * b.height; });
+    assert.ok(await flaeche('#scr-login .logo use') > 0, 'Logo Anmeldung');
+    await anmelden(p, 'mia@x.ch');
+    assert.ok(await flaeche('.kopf .zeichen use') > 0, 'Zeichen im Kopf');
+    await schliessen();
+  });
+
+  test('Fehler am Server: verständliche Meldung statt Technik', async () => {
+    const w = welt();
+    const { p, schliessen } = await oeffnen(w);
+    await anmelden(p, 'mia@x.ch');
+    await belegErfassen(p);
+    w.loeschen('Belege');
+    assert.equal(await toastNach(p, () => p.click('#fm-speichern')),
+                 'Technischer Fehler. Bitte später erneut versuchen.');
     await schliessen();
   });
 });

@@ -145,11 +145,16 @@ function laden(blaetter, optionen = {}) {
   const sheets = {};
   for (const [name, zeilen] of Object.entries(blaetter)) sheets[name] = new Blatt(zeilen);
 
-  const props = {}, cache = {}, mails = [], zaehler = { openById: 0 };
+  const props = {}, cache = {}, mails = [], konsole = [];
+  const zaehler = { openById: 0, sperren: 0, digest: 0 };
   const dr = drive();
 
   const ctx = {
-    console,
+    console: {   // Code.gs protokolliert Fehler; im Test mitschreiben statt ausgeben
+      log:   (...a) => konsole.push(a.join(' ')),
+      warn:  (...a) => konsole.push(a.join(' ')),
+      error: (...a) => konsole.push(a.join(' '))
+    },
     SpreadsheetApp: { openById: () => {
       zaehler.openById++;
       return {
@@ -164,15 +169,16 @@ function laden(blaetter, optionen = {}) {
     },
     PropertiesService: { getScriptProperties: () => ({
       getProperty: k => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
-    CacheService: { getScriptCache: () => ({ get: k => cache[k] || null, put: (k, v) => { cache[k] = v; } }) },
-    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    CacheService: { getScriptCache: () => ({
+      get: k => cache[k] || null, put: (k, v) => { cache[k] = String(v); }, remove: k => { delete cache[k]; } }) },
+    LockService: { getScriptLock: () => ({ waitLock() { zaehler.sperren++; }, releaseLock() {} }) },
     Logger: { log: m => (ctx.__log = (ctx.__log || []).concat(String(m))) },
     MailApp: { sendEmail: m => mails.push(m) },
     DriveApp: dr.dienst,
     Utilities: {
       DigestAlgorithm: { SHA_256: 'sha256' }, Charset: { UTF_8: 'utf8' },
       getUuid: optionen.uuid || (() => crypto.randomUUID()),
-      computeDigest: (alg, s) => [...crypto.createHash('sha256').update(String(s), 'utf8').digest()],
+      computeDigest: (alg, s) => { zaehler.digest++; return [...crypto.createHash('sha256').update(String(s), 'utf8').digest()]; },
       computeHmacSha256Signature: (v, k) => [...crypto.createHmac('sha256', String(k)).update(String(v)).digest()],
       base64Encode: x => Buffer.from(bytes(x)).toString('base64'),
       base64EncodeWebSafe: x => Buffer.from(bytes(x)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_'),
@@ -185,10 +191,12 @@ function laden(blaetter, optionen = {}) {
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(CODE, 'utf8'), ctx, { filename: 'Code.gs' });
 
-  const konst = name => vm.runInContext(name, ctx);
+  const konst = name => vm.runInContext(name, ctx);       // Konstante aus Code.gs lesen
+  const ausfuehren = code => vm.runInContext(code, ctx);  // z. B. Math.random ersetzen
   dr.wurzel(konst('BILD_ORDNER'));   // Wurzelordner wie in Code.gs eingestellt
 
-  return { gs: ctx, konst, blatt: n => sheets[n], drive: dr, mails, props, zaehler, log: () => ctx.__log || [] };
+  return { gs: ctx, konst, ausfuehren, blatt: n => sheets[n], loeschen: n => { delete sheets[n]; },
+           drive: dr, mails, props, cache, zaehler, konsole, log: () => ctx.__log || [] };
 }
 
 /** JSON aus einer ContentService-Antwort */
