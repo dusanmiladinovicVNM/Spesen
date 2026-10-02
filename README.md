@@ -26,6 +26,8 @@ manifest.webmanifest         ime i ikone za dodavanje na home screen
 icons/icon-192.png           ← zamijeni
 icons/icon-512.png           ← zamijeni
 icons/icon-maskable-512.png  ← zamijeni
+fonts/                       Open Sans (woff2) i licenca OFL — font ide iz repoa,
+                             aplikacija ne šalje ništa Google Fonts-u
 
 excel/
   vorlage.png                izgled lista Vorlage (kolone A–H, J slobodna)
@@ -63,12 +65,19 @@ Nova tabela, pet listova. Prvi red je zaglavlje, imena kolona doslovno.
 
 | List | Kolone |
 |---|---|
-| `Belege` | `Zeitstempel` `Mitarbeiter` `Email` `BelegNr` `Datum` `Monat` `Jahr` `Brutto` `MwstSatz` `MwstBetrag` `Netto` `KontoNr` `KontoBez` `KstNr` `KstBez` `Bemerkung` `DedupKey` `Storniert` `Art` `KM` `KmSatz` `BildUrl` |
+| `Belege` | `Zeitstempel` `Mitarbeiter` `Email` `BelegNr` `Datum` `Monat` `Jahr` `Brutto` `MwstSatz` `MwstBetrag` `Netto` `KontoNr` `KontoBez` `KstNr` `KstBez` `Bemerkung` `DedupKey` `Storniert` `Art` `KM` `KmSatz` `BildUrl` `Id` |
 | `Parameter` | `Schluessel` `Wert` `GueltigAb` |
 | `Konten` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Kostenstellen` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` `OrdnerId` `PwGeaendert` `Rolle` |
 | `Sessions` | `Token` `Email` `GueltigBis` — u `Token` stoji samo heš, ne sam token |
+
+**Redosled kolona u `Belege` nije bitan** — server svaku traži po imenu.
+Smeš dodati i svoju kolonu (npr. `Notiz`), server je ne dira. Ako neka od
+gornjih nedostaje, unos se odbija porukom *Spalte fehlt: …*, umesto da se
+vrednost tiho izgubi. `Id` popunjava server: svaki unos dobija svoj, i po
+njemu storno i fotografija u aplikaciji uvek pogađaju pravi red, i kad je
+list ručno sortiran.
 
 Popuni `Konten` i `Kostenstellen`. `Aktiv` upisuj kao `true`.
 `Sortierung` ostavi sa rupama (10, 20, 30) da kasnije možeš ubaciti nešto između.
@@ -104,6 +113,9 @@ Zapiši ID tabele iz URL-a, deo između `/d/` i `/edit`.
    *Projekteinstellungen → Skripteigenschaften* i ispiše ga u log. Token nije
    u kodu, pa ne završava u gitu. Istom funkcijom se token kasnije menja; stari
    tada odmah prestaje da važi, pa novi upiši u URL u Power Query-ju.
+7. U editoru pokreni `idsNachtragen`. Ako u `Belege` nema kolone `Id`, doda
+   je na kraj, pa svakom redu bez Id upiše jedan. U logu piše koliko, i da li
+   neka kolona nedostaje. Ponovno pokretanje ne škodi.
 
 Test u browseru:
 
@@ -126,7 +138,7 @@ Bez toga URL i dalje servira stari kod. Ovo je najčešći uzrok
    svijetla verzija, jer tamni logo na crnoj podlozi nestaje
 3. `icons/` → kvadratne PNG ikone, **samo znak bez teksta**,
    oko 10% praznog ruba
-4. Objavi `index.html`, `foto.html`, `manifest.webmanifest` i `icons/` na
+4. Objavi `index.html`, `foto.html`, `manifest.webmanifest`, `icons/` i `fonts/` na
    statični host sa HTTPS — Cloudflare Pages, Netlify, GitHub Pages
    (ovde: GitHub Pages iz `main`)
 
@@ -320,7 +332,7 @@ node --test tests/*.test.js
 - **`tests/app.test.js`** otvara `index.html` u Chromiumu, a iza njega je
   isti `Code.gs`. Bez `npm install` ovi testovi se preskaču.
 - **`tests/seiten.test.js`** kompajlira skripte iz `index.html` i
-  `foto.html`.
+  `foto.html` i proverava da font dolazi iz `fonts/`.
 
 GitHub ih pokreće sam na svakom PR-u (`.github/workflows/tests.yml`).
 

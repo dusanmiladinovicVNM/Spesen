@@ -17,7 +17,7 @@ const FOTO  = path.join(__dirname, '..', 'icons', 'icon-192.png');
 
 const BELEGE = ['Zeitstempel', 'Mitarbeiter', 'Email', 'BelegNr', 'Datum', 'Monat', 'Jahr',
   'Brutto', 'MwstSatz', 'MwstBetrag', 'Netto', 'KontoNr', 'KontoBez', 'KstNr', 'KstBez',
-  'Bemerkung', 'DedupKey', 'Storniert', 'Art', 'KM', 'KmSatz', 'BildUrl'];
+  'Bemerkung', 'DedupKey', 'Storniert', 'Art', 'KM', 'KmSatz', 'BildUrl', 'Id'];
 const sp = n => BELEGE.indexOf(n);
 
 function welt() {
@@ -50,10 +50,10 @@ after(async () => { if (browser) await browser.close(); });
 async function oeffnen(w, optionen = {}) {
   const kontext = await browser.newContext();
   const p = await kontext.newPage();
-  const posts = [], urls = [];
+  const posts = [], urls = [], alle = [];
   p.on('dialog', d => d.accept());
+  p.on('request', r => alle.push(r.url()));
   if (optionen.vorher) await p.addInitScript(optionen.vorher);
-  await p.route(/fonts\.(googleapis|gstatic)/, r => r.abort());
   await p.route(/script\.google\.com/, async r => {
     const req = r.request();
     const u = new URL(req.url());
@@ -73,7 +73,7 @@ async function oeffnen(w, optionen = {}) {
     await r.fulfill({ status: 200, contentType: 'application/json', body: antwort.getContent() });
   });
   await p.goto(SEITE);
-  return { p, posts, urls, schliessen: () => kontext.close() };
+  return { p, posts, urls, alle, schliessen: () => kontext.close() };
 }
 
 async function anmelden(p, email) {
@@ -225,7 +225,7 @@ describe('App im Browser', { skip: OHNE }, () => {
     await schliessen();
   });
 
-  test('Storno schickt den Schlüssel und trifft nach Umsortieren den richtigen Beleg', async () => {
+  test('Storno schickt die Id und trifft nach Umsortieren den richtigen Beleg', async () => {
     const w = welt();
     const { p, posts, schliessen } = await oeffnen(w);
     await anmelden(p, 'mia@x.ch');
@@ -242,15 +242,16 @@ describe('App im Browser', { skip: OHNE }, () => {
     await p.click('#lst-liste .storno');
     assert.equal(await toastNach(p, () => p.click('#lst-liste .storno')), 'Beleg storniert.');
     const st = posts.find(x => x.action === 'storno');
-    assert.ok(st.key, 'Schlüssel gesendet');
+    assert.ok(st.key, 'Schlüssel gesendet (für Zeilen ohne Id)');
     const getroffen = b.zeilen.slice(1).find(z => z[sp('Storniert')] === true);
+    assert.equal(st.id, getroffen[sp('Id')]);
     assert.ok(erster.endsWith(getroffen[sp('Bemerkung')]), erster + ' / ' + getroffen[sp('Bemerkung')]);
     await schliessen();
   });
 
   test('Sitzungs-Token erscheint nie in einer URL', async () => {
     const w = welt();
-    const { p, urls, schliessen } = await oeffnen(w);
+    const { p, urls, posts, schliessen } = await oeffnen(w);
     await anmelden(p, 'mia@x.ch');
     await belegErfassen(p);
     await toastNach(p, () => p.click('#fm-speichern'));
@@ -258,6 +259,7 @@ describe('App im Browser', { skip: OHNE }, () => {
     await p.waitForSelector('#lst-liste .eintrag');
     await p.click('#lst-liste .foto-auf');
     await p.waitForSelector('#bild-gross:not([hidden])');
+    assert.equal(posts.find(x => x.action === 'bild').id, w.blatt('Belege').zeilen[1][sp('Id')]);
     const token = await p.evaluate(() => localStorage.getItem('session'));
     assert.ok(token && token.length > 40, 'Token vorhanden');
     assert.ok(urls.length >= 5, 'Anfragen beobachtet');
@@ -274,6 +276,22 @@ describe('App im Browser', { skip: OHNE }, () => {
     assert.ok(await flaeche('#scr-login .logo use') > 0, 'Logo Anmeldung');
     await anmelden(p, 'mia@x.ch');
     assert.ok(await flaeche('.kopf .zeichen use') > 0, 'Zeichen im Kopf');
+    await schliessen();
+  });
+
+  test('Schrift kommt aus dem Repo, keine Anfrage an Google Fonts', async () => {
+    const w = welt();
+    const { p, alle, schliessen } = await oeffnen(w);
+    await anmelden(p, 'mia@x.ch');
+    const geladen = await p.evaluate(async () => {
+      await document.fonts.load('600 15px "Open Sans"', 'Spesen Ä ć');   // ć: latin-ext
+      return [...document.fonts].filter(f => f.family.replace(/"/g, '') === 'Open Sans')
+                                .map(f => f.status);
+    });
+    assert.deepEqual(geladen, ['loaded', 'loaded']);
+    const fremd = alle.filter(u => !/^(file:|data:|blob:|https:\/\/script\.google\.com\/)/.test(u));
+    assert.deepEqual(fremd, []);
+    assert.ok(alle.some(u => u.endsWith('/fonts/open-sans-latin.woff2')), 'Schrift aus fonts/');
     await schliessen();
   });
 
