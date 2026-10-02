@@ -1,0 +1,11 @@
+{
+  "name": "spesenerfassung",
+  "private": true,
+  "description": "Tests für Code.gs und die App — node --test tests/*.test.js",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

@@ -30,6 +30,13 @@ pwa/
 excel/
   vorlage.png                izgled lista Vorlage (kolone A–H, J slobodna)
 
+tests/
+  gas.js                     nadomestak za Apps Script servise (Sheets, Drive …)
+  code.test.js               testovi za Code.gs
+  app.test.js                aplikacija u browseru (Playwright)
+  seiten.test.js             skripte u index.html i foto.html se kompajliraju
+package.json                 samo za testove (Playwright)
+
 README.md                    ovaj fajl
 Excel.md                     povezivanje šablona, kolona Foto, SharePoint
 ```
@@ -292,6 +299,33 @@ pa pokreni `zugangVerschicken` ponovo.
 **Odjava uređaja:** obriši red u `Sessions`.
 
 ---
+
+## Automatski testovi
+
+```
+npm install                    # jednom: Playwright za testove u browseru
+node --test tests/*.test.js
+```
+
+- **`tests/code.test.js`** testira server. `tests/gas.js` učitava
+  **nepromenjen** `Code.gs` sa tabelama u memoriji. Lažni Sheets namerno
+  menja podatke kao pravi: `+…`, `=…` i `-…` pretvara u formulu, a `0700`
+  u broj, osim u ćelijama formatiranim kao tekst. Tako testovi vide upravo
+  greške od kojih se `Code.gs` brani.
+- **`tests/app.test.js`** otvara `index.html` u Chromiumu, a iza njega je
+  isti `Code.gs`. Bez `npm install` ovi testovi se preskaču.
+- **`tests/seiten.test.js`** kompajlira skripte iz `index.html` i
+  `foto.html`.
+
+GitHub ih pokreće sam na svakom PR-u (`.github/workflows/tests.yml`).
+
+**Jednom posle objave, na pravom Sheets-u:** u editoru pokreni
+`sheetsSelbsttest`. Funkcija na privremenom listu proverava da `=1+1`,
+`+41 44`, `0700` i heš sa `+` ostaju tekst, pa list briše. Svaki red u
+logu treba da počinje sa `ok`.
+
+Ručni scenariji ispod i dalje važe za ono što testovi ne vide: kameru,
+mejl i Excel.
 
 ## Test pre predaje
 

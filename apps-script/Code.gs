@@ -70,8 +70,11 @@ function out(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+let tabelle = null;   // je Ausführung nur einmal öffnen
+
 function sheet(name) {
-  return SpreadsheetApp.openById(SHEET_ID).getSheetByName(name);
+  if (!tabelle) tabelle = SpreadsheetApp.openById(SHEET_ID);
+  return tabelle.getSheetByName(name);
 }
 
 function round2(x) {
@@ -96,6 +99,105 @@ function hashPass(pw, salt) {
         Utilities.DigestAlgorithm.SHA_256, h, Utilities.Charset.UTF_8));
   }
   return h;
+}
+
+// ------------------------------------------------------------
+//  Schreiben in Sheets
+//  Jeder Text geht über textSetzen() oder zeileSchreiben(). Sonst
+//  deutet Sheets Eingaben um: "=…", "+…", "-…", "@…" wird zur Formel
+//  (eine Formel in "Belege" könnte andere Blätter bis zu den
+//  Passwort-Hashes auslesen, ein Hash mit "+" vorne wäre unbrauchbar),
+//  "0700" wird zur Zahl 700. Textzellen bekommen deshalb das Format
+//  "Nur Text" (@); ein führendes "=" zusätzlich ein Apostroph.
+//  sheetsSelbsttest() prüft das einmal im echten Sheets.
+// ------------------------------------------------------------
+
+/** Wert für eine Textzelle. */
+function textWert(v) {
+  const s = String(v == null ? '' : v);
+  return s.charAt(0) === '=' ? "'" + s : s;
+}
+
+/** Eine Zelle als Text setzen. */
+function textSetzen(sh, zeile, spalte, wert) {
+  sh.getRange(zeile, spalte).setNumberFormat('@').setValue(textWert(wert));
+}
+
+/** Schreibt werte ab Spalte 1 in die Zeile. textSpalten: 1-basierte
+ *  Spaltennummern, die Text enthalten — sie bekommen zuerst das Format,
+ *  damit Sheets beim Schreiben nichts umdeutet. */
+function zeileSchreiben(sh, zeile, werte, textSpalten) {
+  const text = new Set(textSpalten);
+  // zusammenhängende Spalten in einem Aufruf formatieren
+  textSpalten.slice().sort((a, b) => a - b).forEach((c, i, a) => {
+    if (i > 0 && a[i - 1] === c - 1) return;
+    let ende = c;
+    while (text.has(ende + 1)) ende++;
+    sh.getRange(zeile, c, 1, ende - c + 1).setNumberFormat('@');
+  });
+  sh.getRange(zeile, 1, 1, werte.length)
+    .setValues([werte.map((v, i) => text.has(i + 1) ? textWert(v) : v)]);
+}
+
+/** Textspalten in "Belege", nach Namen — Datum ist yyyy-mm-dd als Text */
+const BELEGE_TEXT = ['Mitarbeiter', 'Email', 'BelegNr', 'Datum', 'KontoNr', 'KontoBez',
+  'KstNr', 'KstBez', 'Bemerkung', 'DedupKey', 'Art', 'BildUrl'];
+
+function belegeTextSpalten(head) {
+  return BELEGE_TEXT.map(n => head.indexOf(n) + 1).filter(c => c > 0);
+}
+
+/** Im Editor einmal ausführen: prüft, wie das echte Sheets die
+ *  Schreibhilfen umsetzt. Legt ein Hilfsblatt an und löscht es wieder.
+ *  Erwartet wird im Log überall "ok". */
+function sheetsSelbsttest() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sh = ss.insertSheet('Selbsttest ' + Utilities.getUuid().slice(0, 8));
+  try {
+    const faelle = ['=1+1', '+41 44', '-Taxi', '@x', '0700', '+Kq9/abc=', 'Hotel Bern'];
+    faelle.forEach((f, i) => textSetzen(sh, i + 1, 1, f));
+    const werte  = sh.getRange(1, 1, faelle.length, 1).getValues();
+    const formel = sh.getRange(1, 1, faelle.length, 1).getFormulas();
+    faelle.forEach((f, i) => {
+      const ok = werte[i][0] === f && !formel[i][0];
+      Logger.log((ok ? 'ok     ' : 'FEHLER ') + JSON.stringify(f) + ' → ' +
+                 JSON.stringify(werte[i][0]) + (formel[i][0] ? ' (Formel!)' : ''));
+    });
+  } finally {
+    ss.deleteSheet(sh);
+  }
+}
+
+/** Zeilennummer eines eigenen, nicht stornierten Belegs, oder 0.
+ *  Gesucht wird über den DedupKey. Stimmt die mitgeschickte Zeile noch
+ *  (gleicher Schlüssel), gilt genau sie — so trifft es auch bei zwei
+ *  Zeilen mit demselben Schlüssel die angetippte. Ohne Schlüssel gilt
+ *  die Zeilennummer nur für Zeilen, die selbst keinen haben.
+ *  Gelesen werden nur die drei nötigen Spalten, nicht das ganze Blatt. */
+function belegZeile(sh, u, key, zeile) {
+  const letzte = sh.getLastRow();
+  if (letzte < 2) return 0;
+  const head   = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+  const spalte = n => {
+    const i = head.indexOf(n);
+    return i < 0 ? null : sh.getRange(2, i + 1, letzte - 1, 1).getValues().map(z => z[0]);
+  };
+  const eml = spalte('Email'), sto = spalte('Storniert'), keys = spalte('DedupKey') || [];
+  if (!eml || !sto) return 0;
+
+  const ich   = String(u.email).trim().toLowerCase();
+  const eigen = i => i >= 0 && i < eml.length &&
+    String(eml[i]).trim().toLowerCase() === ich && String(sto[i]).toLowerCase() !== 'true';
+  const k = i => String(keys[i] == null ? '' : keys[i]).trim();
+
+  key = String(key || '').trim();
+  const hinweis = Number(zeile) - 2;          // Index in den Spalten, NaN ohne Zeile
+  if (key) {
+    if (eigen(hinweis) && k(hinweis) === key) return hinweis + 2;
+    for (let i = 0; i < eml.length; i++) if (k(i) === key && eigen(i)) return i + 2;
+    return 0;
+  }
+  return eigen(hinweis) && k(hinweis) === '' ? hinweis + 2 : 0;
 }
 
 /** Zaglavlja iz tabele stižu ponekad sa razmakom na kraju.
@@ -188,7 +290,7 @@ function benutzerOrdner(u) {
   }
 
   const ordner = DriveApp.getFolderById(BILD_ORDNER).createFolder(u.name || u.email);
-  sh.getRange(z.zeile, iOrd + 1).setValue(ordner.getId());
+  textSetzen(sh, z.zeile, iOrd + 1, ordner.getId());
   return ordner;
 }
 
@@ -277,9 +379,9 @@ function login(b) {
   sh.getRange(u.zeile, 8).setValue(new Date());
 
   const token = Utilities.getUuid();
-  sheet('Sessions').appendRow([
-    token, email, new Date(Date.now() + SESSION_TAGE * 86400000)
-  ]);
+  const ses   = sheet('Sessions');
+  zeileSchreiben(ses, ses.getLastRow() + 1,
+    [token, email, new Date(Date.now() + SESSION_TAGE * 86400000)], [1, 2]);
 
   const kopfz  = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
   const iGeaen = kopfz.indexOf('PwGeaendert');
@@ -328,8 +430,8 @@ function passwortAendern(b, u) {
   }
   const salt = Utilities.getUuid();
   const sh = sheet('Benutzer');
-  sh.getRange(z.zeile, 3).setValue(hashPass(b.neu, salt));
-  sh.getRange(z.zeile, 4).setValue(salt);
+  textSetzen(sh, z.zeile, 3, hashPass(b.neu, salt));
+  textSetzen(sh, z.zeile, 4, salt);
 
   const kopfz  = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
   const iGeaen = kopfz.indexOf('PwGeaendert');
@@ -368,7 +470,11 @@ function doGet(e) {
       return out({ ok: false, error: 'Spalte fehlt: ' + fehlend.join(', ') });
     }
 
-    const zellen = v => '"' + String(v).replace(/"/g, '""') + '"';
+    // Wer den CSV direkt in Excel öffnet, bekäme "=…" sonst als Formel
+    const zellen = v => {
+      const s = (typeof v === 'string' && /^[=+\-@]/.test(v)) ? "'" + v : String(v);
+      return '"' + s.replace(/"/g, '""') + '"';
+    };
 
     const csv = [EXPORT_SPALTEN.map(zellen).join(',')].concat(
       rows
@@ -402,22 +508,15 @@ function doGet(e) {
   // Bild einer eigenen Zeile — geht bewusst über den Server,
   // damit Mitarbeitende keinen Drive-Zugriff brauchen.
   if (p.action === 'bild') {
-    const sh     = sheet('Belege');
-    const zeile  = Number(p.zeile);
-    const breite = sh.getLastColumn();
-    if (!zeile || zeile < 2) return out({ ok: false, error: 'zeile fehlt' });
-
-    const head = kopf(sh.getRange(1, 1, 1, breite).getValues());
-    const iEml = head.indexOf('Email');
+    const sh   = sheet('Belege');
+    const head = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
     const iBld = head.indexOf('BildUrl');
-    if (iEml < 0 || iBld < 0) return out({ ok: false, error: 'Spalte fehlt' });
+    if (head.indexOf('Email') < 0 || iBld < 0) return out({ ok: false, error: 'Spalte fehlt' });
 
-    const row = sh.getRange(zeile, 1, 1, breite).getValues()[0];
-    if (String(row[iEml]).trim().toLowerCase() !== String(u.email).trim().toLowerCase()) {
-      return out({ ok: false, error: 'fremder Beleg' });
-    }
+    const zeile = belegZeile(sh, u, p.key, p.zeile);
+    if (!zeile) return out({ ok: false, error: 'nicht gefunden' });
 
-    const treffer = String(row[iBld] || '').match(/[-\w]{25,}/);
+    const treffer = String(sh.getRange(zeile, iBld + 1).getValue() || '').match(/[-\w]{25,}/);
     if (!treffer) return out({ ok: false, error: 'kein Bild' });
 
     try {
@@ -435,8 +534,8 @@ function doGet(e) {
     rows.shift();
     const ix = n => head.indexOf(n);
 
-    // _zeile = stvarni broj reda u tabeli; storno ide po njemu,
-    // pa ne zavisi od toga kako je kolona DedupKey nazvana
+    // _zeile = broj reda u trenutku čitanja. Storno i foto idu po
+    // DedupKey (belegZeile), a _zeile je samo rezerva za redove bez ključa
     const iDat = head.indexOf('Datum');
     const alle = rows.map((r, i) => {
       const o = { _zeile: i + 2 };
@@ -465,6 +564,19 @@ function aktiveListe(name) {
                  String(r[2]).toLowerCase() === 'true')
     .sort((a, b) => (Number(a[3]) || 0) - (Number(b[3]) || 0))
     .map(r => ({ nr: String(r[0]).trim(), bez: String(r[1]).trim() }));
+}
+
+/** Aktiver Eintrag aus Konten oder Kostenstellen, sonst null. */
+function stammEintrag(liste, nr) {
+  nr = String(nr == null ? '' : nr).trim();
+  if (!nr) return null;
+  const rows = sheet(liste).getDataRange().getValues();
+  for (let i = 1; i < rows.length; i++) {
+    if (String(rows[i][0]).trim() === nr && String(rows[i][2]).toLowerCase() === 'true') {
+      return { nr: nr, bez: String(rows[i][1]).trim() };
+    }
+  }
+  return null;
 }
 
 
@@ -561,7 +673,7 @@ function doPost(e) {
     // Alle admin_* Aktionen laufen durch dieselbe Rollenprüfung
     if (String(b.action || '').indexOf('admin_') === 0) {
       if (u.rolle !== 'admin') return out({ ok: false, error: 'keine Berechtigung' });
-      if (b.action === 'admin_liste') return adminListe();
+      if (b.action === 'admin_liste') return adminListe(u);
       if (b.action === 'admin_neu')   return adminNeu(b, u);
       if (b.action === 'admin_aktiv') return adminAktiv(b, u);
       if (b.action === 'admin_reset') return adminReset(b, u);
@@ -612,6 +724,12 @@ function beleg(b, u) {
   if (String(b.bemerkung || '').trim() === '')        return out({ ok: false, error: 'bemerkung' });
   // ohne "base64," würde bildSpeichern() still nichts speichern
   if (String(b.bild || '').indexOf('base64,') < 0)    return out({ ok: false, error: 'foto' });
+
+  // Konto und Kostenstelle müssen aktiv sein; die Bezeichnung kommt aus
+  // den Stammdaten, nicht aus der Anfrage
+  const konto = stammEintrag('Konten', b.kontoNr);
+  const kst   = stammEintrag('Kostenstellen', b.kstNr);
+  if (!konto || !kst) return out({ ok: false, error: 'stamm' });
   const mwst  = round2(brutto - brutto / (1 + satz / 100));
   const netto = round2(brutto - mwst);
 
@@ -637,7 +755,7 @@ function beleg(b, u) {
     }
   }
 
-  sh.appendRow([
+  zeileSchreiben(sh, sh.getLastRow() + 1, [
     new Date(),                 // Zeitstempel
     u.name,                     // Mitarbeiter  ← aus der Sitzung
     u.email,                    // Email        ← aus der Sitzung
@@ -649,18 +767,18 @@ function beleg(b, u) {
     satz / 100,                 // 0.081 — Excel-Prozentformat erwartet das so
     mwst,
     netto,
-    String(b.kontoNr),
-    String(b.kontoBez || ''),
-    String(b.kstNr),
-    String(b.kstBez || ''),
-    String(b.bemerkung || ''),
+    konto.nr,                   // Text: führende Nullen bleiben
+    konto.bez,
+    kst.nr,
+    kst.bez,
+    String(b.bemerkung),
     key,
     false,
     'Beleg',
     '',
     '',
     bildUrl
-  ]);
+  ], belegeTextSpalten(head));
 
   return out({ ok: true, mwst: mwst, netto: netto, bild: !!bildUrl });
 }
@@ -675,6 +793,8 @@ function fahrt(b, u) {
   if (fehler)         return out({ ok: false, error: fehler });
   if (!b.kstNr)       return out({ ok: false, error: 'konto' });
   if (String(b.bemerkung || '').trim() === '') return out({ ok: false, error: 'zweck' });
+  const kst = stammEintrag('Kostenstellen', b.kstNr);
+  if (!kst)           return out({ ok: false, error: 'stamm' });
 
   const satz = Number(parameter('KmSatz', b.datum));
   if (!satz) return out({ ok: false, error: 'kmsatz' });
@@ -682,7 +802,7 @@ function fahrt(b, u) {
   const kontoNr = String(parameter('KmKonto', b.datum) || '').trim();
   if (!kontoNr) return out({ ok: false, error: 'kmkonto' });
 
-  const kontoTreffer = aktiveListe('Konten').filter(k => k.nr === kontoNr)[0];
+  const kontoTreffer = stammEintrag('Konten', kontoNr);
   const kontoBez = kontoTreffer ? kontoTreffer.bez : '';
 
   const brutto = round2(km * satz);
@@ -716,42 +836,29 @@ function fahrt(b, u) {
     String(b.datum), Number(b.monat), Number(b.jahr),
     brutto, 0, 0, brutto,
     kontoNr, kontoBez,
-    String(b.kstNr), String(b.kstBez || ''),
+    kst.nr, kst.bez,
     text, key, false,
     'Fahrt', km, satz, ''
   ];
 
-  if (treffer) {
-    sh.getRange(treffer, 1, 1, zeile.length).setValues([zeile]);
-  } else {
-    sh.appendRow(zeile);
-  }
+  zeileSchreiben(sh, treffer || sh.getLastRow() + 1, zeile, belegeTextSpalten(head));
 
   return out({ ok: true, brutto: brutto, satz: satz, ersetzt: !!treffer });
 }
 
 
 function storno(b, u) {
-  const sh    = sheet('Belege');
-  const zeile = Number(b.zeile);
+  const sh   = sheet('Belege');
+  const head = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
+  const iSto = head.indexOf('Storniert');
 
-  if (!zeile || zeile < 2) return out({ ok: false, error: 'zeile fehlt' });
-
-  const breite = sh.getLastColumn();
-  const head   = kopf(sh.getRange(1, 1, 1, breite).getValues());
-  const iSto   = head.indexOf('Storniert');
-  const iEml   = head.indexOf('Email');
-
-  if (iSto < 0 || iEml < 0) {
+  if (iSto < 0 || head.indexOf('Email') < 0) {
     return out({ ok: false,
       error: 'Spalte fehlt. Gefundene Kopfzeile: ' + head.join(' | ') });
   }
 
-  const row = sh.getRange(zeile, 1, 1, breite).getValues()[0];
-
-  if (String(row[iEml]).trim().toLowerCase() !== String(u.email).trim().toLowerCase()) {
-    return out({ ok: false, error: 'fremder Beleg' });
-  }
+  const zeile = belegZeile(sh, u, b.key, b.zeile);
+  if (!zeile) return out({ ok: false, error: 'nicht gefunden' });
 
   sh.getRange(zeile, iSto + 1).setValue(true);
   return out({ ok: true });
@@ -867,8 +974,8 @@ function zugangSenden(zeile, email, name, mailSchicken) {
   const pw   = zufallPasswort();
   const salt = Utilities.getUuid();
 
-  sh.getRange(zeile, 3).setValue(hashPass(pw, salt));
-  sh.getRange(zeile, 4).setValue(salt);
+  textSetzen(sh, zeile, 3, hashPass(pw, salt));
+  textSetzen(sh, zeile, 4, salt);
   sh.getRange(zeile, 5).setValue(true);
   sh.getRange(zeile, 6).setValue(0);
   sh.getRange(zeile, 7).setValue('');
@@ -911,7 +1018,7 @@ function zugangVerschicken() {
 //  senden.
 // ============================================================
 
-function adminListe() {
+function adminListe(u) {
   const sh   = sheet('Benutzer');
   const rows = sh.getDataRange().getValues();
   const head = kopf(rows);
@@ -919,7 +1026,7 @@ function adminListe() {
   const ix = n => head.indexOf(n);
 
   const jetzt = new Date();
-  return out({ ok: true, benutzer: rows
+  return out({ ok: true, ich: String(u.email).trim().toLowerCase(), benutzer: rows
     .filter(r => String(r[0]).trim())
     .map((r, i) => ({
       zeile:       i + 2,
@@ -948,8 +1055,8 @@ function adminNeu(b) {
   if (benutzerZeile(email)) return out({ ok: false, error: 'existiert bereits' });
 
   const sh = sheet('Benutzer');
-  sh.appendRow([email, name, '', '', true, 0, '', '']);
-  const zeile = sh.getLastRow();
+  const zeile = sh.getLastRow() + 1;
+  zeileSchreiben(sh, zeile, [email, name, '', '', true, 0, '', ''], [1, 2]);
 
   const mailSchicken = b.mail !== false;
   let pw, mailOk = mailSchicken;
@@ -1135,8 +1242,7 @@ function adminStammNeu(b) {
   }
 
   const zeile = sh.getLastRow() + 1;
-  sh.getRange(zeile, 1, 1, 2).setNumberFormat('@');   // führende Nullen bleiben
-  sh.getRange(zeile, 1, 1, 4).setValues([[nr, bez, true, sort]]);
+  zeileSchreiben(sh, zeile, [nr, bez, true, sort], [1, 2]);   // führende Nullen bleiben
   return out({ ok: true });
 }
 
@@ -1157,7 +1263,7 @@ function adminStammAendern(b) {
     if (isNaN(sort)) return out({ ok: false, error: 'Sortierung ungültig' });
   }
 
-  sh.getRange(x.zeile, 2).setNumberFormat('@').setValue(bez);
+  textSetzen(sh, x.zeile, 2, bez);
   sh.getRange(x.zeile, 4).setValue(sort);
   return out({ ok: true });
 }
