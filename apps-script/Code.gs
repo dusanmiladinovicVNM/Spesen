@@ -15,7 +15,8 @@
 // ============================================================
 
 const SHEET_ID   = '1rDi4UQDGc_H1fADmFETAEi1Ef5WN9vboF5Av1W1Phmk';                 // Teil der URL zwischen /d/ und /edit
-const TOKEN_READ = 'HIER_LANGER_ZUFALLSSTRING';        // nur für den CSV-Endpunkt (Excel)
+// TOKEN_READ (Schlüssel für den CSV-Export) steht nicht hier, sondern in
+// Projekteinstellungen → Skripteigenschaften. Neu setzen: tokenErneuern().
 const PWA_URL    = 'https://dusanmiladinovicvnm.github.io/Spesen/';        // Zugangsmail, Foto-Links
 
 const BILD_ORDNER      = '1F7Y7DKMu9s5JEL67w5Ywy7p88vpMRTCM';      // Wurzelordner für Belegfotos
@@ -217,13 +218,52 @@ function alsDatum(v) {
   return String(v || '').slice(0, 10);
 }
 
+/** Zufallsbytes aus Utilities.getUuid() — dahinter steht ein
+ *  kryptografischer Generator (java.util.UUID.randomUUID), anders als
+ *  bei Math.random. Version und Variante der UUID (Byte 6 und 8) sind
+ *  fest und werden übersprungen. */
+function zufallBytes(anzahl) {
+  const b = [];
+  while (b.length < anzahl) {
+    const hex = Utilities.getUuid().replace(/-/g, '');
+    for (let i = 0; i < 16 && b.length < anzahl; i++) {
+      if (i !== 6 && i !== 8) b.push(parseInt(hex.substr(i * 2, 2), 16));
+    }
+  }
+  return b;
+}
+
 function zufallPasswort() {
-  const c = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const c = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // 56 Zeichen
   let s = '';
-  for (let i = 0; i < 12; i++) {
-    s += c.charAt(Math.floor(Math.random() * c.length));
+  while (s.length < 12) {
+    // 224 = 4 × 56: höhere Werte verwerfen, sonst kämen manche Zeichen öfter
+    zufallBytes(16).forEach(x => { if (x < 224 && s.length < 12) s += c.charAt(x % 56); });
   }
   return s;
+}
+
+/** In "Sessions" steht nur der Hash eines Tokens — wer die Tabelle oder
+ *  eine Sicherung liest, kann sich damit nicht anmelden. */
+function tokenHash(token) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256, String(token), Utilities.Charset.UTF_8));
+}
+
+/** Schlüssel für den CSV-Export, aus den Skripteigenschaften. */
+function tokenRead() {
+  return PropertiesService.getScriptProperties().getProperty('TOKEN_READ') || '';
+}
+
+/** Im Editor ausführen: neuen Schlüssel für den CSV-Export erzeugen.
+ *  Danach im Power-Query-URL ...&token=<neu> eintragen — der alte gilt
+ *  sofort nicht mehr. Die Foto-Links in Excel sind davon unabhängig. */
+function tokenErneuern() {
+  const neu = zufallBytes(32).map(x => ('0' + x.toString(16)).slice(-2)).join('');
+  PropertiesService.getScriptProperties().setProperty('TOKEN_READ', neu);
+  Logger.log('Neuer TOKEN_READ: ' + neu);
+  Logger.log('In Power Query: <Web-App-URL>?token=' + neu + '&format=csv');
+  return neu;
 }
 
 
@@ -340,9 +380,32 @@ function benutzerZeile(email) {
   return null;
 }
 
+/** Fehlversuche für Adressen ohne Konto — im Cache, damit auch sie nach
+ *  MAX_FEHLER gesperrt wirken. Sonst verriete die Sperre, welche
+ *  Adressen ein Konto haben. Gibt den Fehlercode zurück. */
+function fremderFehlversuch(email) {
+  const cache = CacheService.getScriptCache();
+  const key   = 'login:' + tokenHash(String(email || '').trim().toLowerCase());
+  if (cache.get(key + ':sperre')) return 'gesperrt';
+  const n = Number(cache.get(key) || 0) + 1;
+  if (n >= MAX_FEHLER) {
+    cache.put(key + ':sperre', '1', SPERRE_MIN * 60);
+    cache.remove(key);
+  } else {
+    cache.put(key, String(n), SPERRE_MIN * 60);
+  }
+  return 'login';
+}
+
+/** Antworten unterscheiden sich erst, wenn das Passwort stimmt: Wer es
+ *  nicht kennt, erfährt weder, ob es die Adresse gibt, noch, ob das
+ *  Konto inaktiv ist. Auch die Rechenzeit ist gleich (hashPass läuft immer). */
 function login(b) {
   const u = benutzerZeile(b.email);
-  if (!u) return out({ ok: false, error: 'login' });
+  if (!u) {
+    hashPass(String(b.passwort || ''), 'kein-konto');
+    return out({ ok: false, error: fremderFehlversuch(b.email) });
+  }
 
   const sh = sheet('Benutzer');
   const email       = u.d[0];
@@ -353,17 +416,12 @@ function login(b) {
   const fehler      = u.d[5];
   const gesperrtBis = u.d[6];
 
-  if (String(aktiv).toLowerCase() !== 'true') {
-    return out({ ok: false, error: 'inaktiv' });
-  }
   if (gesperrtBis && new Date(gesperrtBis) > new Date()) {
     return out({ ok: false, error: 'gesperrt' });
   }
-  if (!hash) {
-    return out({ ok: false, error: 'login' });
-  }
 
-  if (hashPass(b.passwort, salt) !== hash) {
+  const pwOk = hashPass(String(b.passwort || ''), salt) === hash;
+  if (!hash || !pwOk) {
     const n = Number(fehler || 0) + 1;
     if (n >= MAX_FEHLER) {
       sh.getRange(u.zeile, 6).setValue(0);
@@ -373,15 +431,18 @@ function login(b) {
     }
     return out({ ok: false, error: 'login' });
   }
+  if (String(aktiv).toLowerCase() !== 'true') {
+    return out({ ok: false, error: 'inaktiv' });
+  }
 
   sh.getRange(u.zeile, 6).setValue(0);
   sh.getRange(u.zeile, 7).setValue('');
   sh.getRange(u.zeile, 8).setValue(new Date());
 
-  const token = Utilities.getUuid();
+  const token = Utilities.getUuid() + Utilities.getUuid();
   const ses   = sheet('Sessions');
   zeileSchreiben(ses, ses.getLastRow() + 1,
-    [token, email, new Date(Date.now() + SESSION_TAGE * 86400000)], [1, 2]);
+    [tokenHash(token), email, new Date(Date.now() + SESSION_TAGE * 86400000)], [1, 2]);
 
   const kopfz  = kopf(sh.getRange(1, 1, 1, sh.getLastColumn()).getValues());
   const iGeaen = kopfz.indexOf('PwGeaendert');
@@ -400,9 +461,16 @@ function login(b) {
  *  nie aus dem Request — sonst könnte jeder unter fremdem Namen erfassen. */
 function session(token) {
   if (!token) return null;
-  const rows = sheet('Sessions').getDataRange().getValues();
+  const ses  = sheet('Sessions');
+  const rows = ses.getDataRange().getValues();
+  const hash = tokenHash(token);
   for (let i = 1; i < rows.length; i++) {
-    if (rows[i][0] === token && new Date(rows[i][2]) > new Date()) {
+    const gespeichert = String(rows[i][0]);
+    // Klartext: Sitzung von vor der Umstellung — jetzt durch den Hash ersetzen.
+    // Ein gespeicherter Hash zählt nie als Klartext, sonst ginge er selbst als Token durch.
+    const alt = gespeichert === String(token) && !/^[\w-]{43}=$/.test(gespeichert);
+    if ((gespeichert === hash || alt) && new Date(rows[i][2]) > new Date()) {
+      if (alt) textSetzen(ses, i + 1, 1, hash);
       const u = benutzerZeile(rows[i][1]);
       if (!u || String(u.d[4]).toLowerCase() !== 'true') return null;
 
@@ -453,7 +521,8 @@ function doGet(e) {
 
   // CSV für Power Query — Excel kann sich nicht anmelden
   if (p.format === 'csv') {
-    if (p.token !== TOKEN_READ) return out({ ok: false, error: 'auth' });
+    const t = tokenRead();
+    if (!t || p.token !== t) return out({ ok: false, error: 'auth' });
 
     const rows = sheet('Belege').getDataRange().getValues();
     const head = kopf(rows);
@@ -493,9 +562,15 @@ function doGet(e) {
   // Beleg-Foto für foto.html — der Link aus der Spalte BildLink
   if (p.format === 'foto') return fotoDaten(p.id, p.sig);
 
+  // GET mit Sitzung nur noch für eine geöffnete alte App — die aktuelle
+  // fragt per POST, damit das Token nicht in URLs und Logs landet
   const u = session(p.session);
   if (!u) return out({ ok: false, error: 'session' });
+  return lesen(p, u);
+}
 
+/** Lesende Aktionen, ohne Sperre — für GET und POST gleich. */
+function lesen(p, u) {
   if (p.action === 'stammdaten') {
     return out({
       ok: true,
@@ -555,6 +630,8 @@ function doGet(e) {
 
   return out({ ok: false, error: 'unbekannte Aktion' });
 }
+
+const LESE_AKTIONEN = ['stammdaten', 'bild', 'meine'];
 
 function aktiveListe(name) {
   const rows = sheet(name).getDataRange().getValues();
@@ -660,11 +737,27 @@ function fotoDaten(id, sig) {
 // ============================================================
 
 function doPost(e) {
+  let b;
+  try {
+    b = JSON.parse(e.postData.contents);
+  } catch (err) {
+    return out({ ok: false, error: 'anfrage' });
+  }
+
+  // Lesen braucht keine Sperre und hält niemanden auf
+  if (LESE_AKTIONEN.indexOf(b.action) >= 0) {
+    try {
+      const u = session(b.session);
+      if (!u) return out({ ok: false, error: 'session' });
+      return lesen(b, u);
+    } catch (err) {
+      return serverFehler(err);
+    }
+  }
+
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    const b = JSON.parse(e.postData.contents);
-
     if (b.action === 'login') return login(b);
 
     const u = session(b.session);
@@ -691,10 +784,17 @@ function doPost(e) {
     return beleg(b, u);
 
   } catch (err) {
-    return out({ ok: false, error: String(err) });
+    return serverFehler(err);
   } finally {
     lock.releaseLock();
   }
+}
+
+/** Technische Details ins Protokoll (Apps Script → Ausführungen),
+ *  zum Client nur ein Code. */
+function serverFehler(err) {
+  console.error(err && err.stack ? err.stack : String(err));
+  return out({ ok: false, error: 'serverfehler' });
 }
 
 /** Datum und Abrechnungsperiode, gemeinsam für Beleg und Fahrt.
@@ -751,7 +851,8 @@ function beleg(b, u) {
     try {
       bildUrl = bildSpeichern(b.bild, u, b.datum, brutto, b.belegNr);
     } catch (err) {
-      return out({ ok: false, error: 'bild: ' + err.message });
+      console.error('bildSpeichern: ' + (err && err.stack ? err.stack : err));
+      return out({ ok: false, error: 'bild' });
     }
   }
 

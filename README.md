@@ -20,12 +20,12 @@ apps-script/
   Code.gs                    ceo backend — prijava, unos, Fahrt, storno, CSV,
                              stranica sa fotografijom za Excel
 
-pwa/
-  index.html                 CIJELA aplikacija: CSS, HTML, logika, konfiguracija, logo
-  foto.html                  preuzimanje fotografije iz Excela (link u koloni J)
-  manifest.webmanifest       ime i ikone za dodavanje na home screen
-  icons/icon-192.png         ← zamijeni
-  icons/icon-512.png         ← zamijeni
+index.html                   CIJELA aplikacija: CSS, HTML, logika, konfiguracija, logo
+foto.html                    preuzimanje fotografije iz Excela (link u koloni K)
+manifest.webmanifest         ime i ikone za dodavanje na home screen
+icons/icon-192.png           ← zamijeni
+icons/icon-512.png           ← zamijeni
+icons/icon-maskable-512.png  ← zamijeni
 
 excel/
   vorlage.png                izgled lista Vorlage (kolone A–H, J slobodna)
@@ -68,7 +68,7 @@ Nova tabela, pet listova. Prvi red je zaglavlje, imena kolona doslovno.
 | `Konten` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Kostenstellen` | `Nr` `Bezeichnung` `Aktiv` `Sortierung` |
 | `Benutzer` | `Email` `Name` `PassHash` `Salt` `Aktiv` `Fehler` `GesperrtBis` `LetzterLogin` `OrdnerId` `PwGeaendert` `Rolle` |
-| `Sessions` | `Token` `Email` `GueltigBis` |
+| `Sessions` | `Token` `Email` `GueltigBis` — u `Token` stoji samo heš, ne sam token |
 
 Popuni `Konten` i `Kostenstellen`. `Aktiv` upisuj kao `true`.
 `Sortierung` ostavi sa rupama (10, 20, 30) da kasnije možeš ubaciti nešto između.
@@ -95,11 +95,15 @@ Zapiši ID tabele iz URL-a, deo između `/d/` i `/edit`.
 **Erweiterungen → Apps Script** iz same tabele.
 
 1. Obriši sadržaj i zalepi `apps-script/Code.gs`
-2. Na vrhu postavi `SHEET_ID`, `TOKEN_READ` i `PWA_URL`
+2. Na vrhu postavi `SHEET_ID` i `PWA_URL`
 3. **Bereitstellen → Neue Bereitstellung → Web-App**
    *Ausführen als: Ich*, *Zugriff: Jeder*
 4. Prvi put traži odobrenje za pristup tabeli i slanje pošte — potvrdi
 5. Zapiši **Web-App-URL**
+6. U editoru pokreni `tokenErneuern`. Funkcija napravi novi `TOKEN_READ` u
+   *Projekteinstellungen → Skripteigenschaften* i ispiše ga u log. Token nije
+   u kodu, pa ne završava u gitu. Istom funkcijom se token kasnije menja; stari
+   tada odmah prestaje da važi, pa novi upiši u URL u Power Query-ju.
 
 Test u browseru:
 
@@ -118,12 +122,13 @@ Bez toga URL i dalje servira stari kod. Ovo je najčešći uzrok
 ## Faza 3 — PWA (~20 min)
 
 1. `index.html` → u bloku `const CONFIG` upiši Web-App-URL
-2. `index.html` → u `<symbol id="logo">` zalijepi svoj SVG logotip;
+2. `index.html` → u `<g id="logo-pfade">` zalijepi svoj SVG logotip;
    svijetla verzija, jer tamni logo na crnoj podlozi nestaje
-3. `pwa/icons/` → kvadratne PNG ikone, **samo znak bez teksta**,
+3. `icons/` → kvadratne PNG ikone, **samo znak bez teksta**,
    oko 10% praznog ruba
-4. Objavi sadržaj foldera `pwa/` na statični host sa HTTPS —
-   Cloudflare Pages, Netlify, GitHub Pages
+4. Objavi `index.html`, `foto.html`, `manifest.webmanifest` i `icons/` na
+   statični host sa HTTPS — Cloudflare Pages, Netlify, GitHub Pages
+   (ovde: GitHub Pages iz `main`)
 
 Kasnije izmjene: `index.html` uredi direktno u GitHub browseru,
 ikonica olovke → **Commit changes**. Za minut je promjena vani.
@@ -147,7 +152,7 @@ Detaljno u **`Excel.md`**. Ukratko:
 
 1. **Daten → Aus dem Web**, URL sa `&format=csv`, autentifikacija **Anonym**
 2. Prvi red kao zaglavlje, tipovi kolona, upit preimenuj u **`Belege`**
-3. Učitaj u novi list, nazovi ga `Daten`, sakrij
+3. Učitaj u novi list, nazovi ga `Belege`, sakrij
 4. Sačuvaj kao **.xlsm** sa `Workbook_Open` makroom — na Macu je to jedini
    način za automatsko osvežavanje
 

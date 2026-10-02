@@ -12,9 +12,11 @@ const BENUTZER = ['Email', 'Name', 'PassHash', 'Salt', 'Aktiv', 'Fehler', 'Gespe
   'LetzterLogin', 'OrdnerId', 'PwGeaendert', 'Rolle'];
 const sp = n => BELEGE.indexOf(n);
 
+const TOKEN = 'csv-token-fuer-tests';
+
 function welt(optionen) {
   const morgen = new Date(Date.now() + 86400000);
-  return laden({
+  const w = laden({
     Belege: [BELEGE],
     Konten: [['Nr', 'Bezeichnung', 'Aktiv', 'Sortierung'],
       [4430, 'Reisekosten', true, 10], [6210, 'Fahrzeugkosten', true, 20], [5000, 'Alt', false, 30]],
@@ -28,6 +30,8 @@ function welt(optionen) {
     Sessions: [['Token', 'Email', 'GueltigBis'],
       ['T-ADMIN', 'admin@x.ch', morgen], ['T-MIA', 'mia@x.ch', morgen]]
   }, optionen);
+  w.props.TOKEN_READ = TOKEN;   // Skripteigenschaft wie nach tokenErneuern()
+  return w;
 }
 
 const post = (w, body) => json(w.gs.doPost({ postData: { contents: JSON.stringify(body) } }));
@@ -165,7 +169,7 @@ describe('Schreiben in Sheets', () => {
   test('CSV entschärft Formelzeichen für Excel', () => {
     const w = welt();
     beleg(w, { bemerkung: '=HYPERLINK("http://x";"Beleg")' });
-    const csv = get(w, { format: 'csv', token: w.konst('TOKEN_READ') }).getContent();
+    const csv = get(w, { format: 'csv', token: TOKEN }).getContent();
     assert.match(csv, /"'=HYPERLINK\(""http:\/\/x"";""Beleg""\)"/);
   });
 
@@ -297,7 +301,7 @@ describe('Foto-Link für Excel', () => {
   test('CSV liefert BildLink auf foto.html, die Signatur öffnet genau ein Foto', () => {
     const w = welt();
     beleg(w);
-    const csv = get(w, { format: 'csv', token: w.konst('TOKEN_READ') }).getContent().split('\n');
+    const csv = get(w, { format: 'csv', token: TOKEN }).getContent().split('\n');
     assert.match(csv[0], /"BildUrl","BildLink"$/);
     const link = JSON.parse('[' + csv[1] + ']').pop();
     assert.ok(link.startsWith(w.konst('PWA_URL') + 'foto.html?id='), link);
@@ -312,6 +316,141 @@ describe('Foto-Link für Excel', () => {
 
   test('CSV ohne gültigen Token: abgelehnt', () => {
     const w = welt();
-    assert.equal(json(get(w, { format: 'csv', token: anders(w.konst('TOKEN_READ'), 0) })).error, 'auth');
+    assert.equal(json(get(w, { format: 'csv', token: anders(TOKEN, 0) })).error, 'auth');
+  });
+});
+
+
+describe('CSV-Token', () => {
+  test('steht in den Skripteigenschaften, nicht im Code', () => {
+    const w = welt();
+    assert.throws(() => w.konst('TOKEN_READ'), /TOKEN_READ is not defined/);
+    assert.match(get(w, { format: 'csv', token: TOKEN }).getContent(), /^"Datum"/);
+    delete w.props.TOKEN_READ;
+    // ohne Eigenschaft gilt kein Token — auch nicht der alte Platzhalter
+    assert.equal(json(get(w, { format: 'csv', token: 'HIER_LANGER_ZUFALLSSTRING' })).error, 'auth');
+    assert.equal(json(get(w, { format: 'csv', token: '' })).error, 'auth');
+  });
+
+  test('tokenErneuern: neuer, langer Token, der alte gilt sofort nicht mehr', () => {
+    const w = welt();
+    const neu = w.gs.tokenErneuern();
+    assert.match(neu, /^[0-9a-f]{64}$/);
+    assert.equal(w.props.TOKEN_READ, neu);
+    assert.notEqual(w.gs.tokenErneuern(), neu);
+    assert.equal(json(get(w, { format: 'csv', token: neu })).error, 'auth');
+    assert.match(get(w, { format: 'csv', token: w.props.TOKEN_READ }).getContent(), /^"Datum"/);
+  });
+});
+
+
+describe('Zufall', () => {
+  test('Passwörter ohne Math.random, 12 Zeichen aus dem Alphabet, verschieden', () => {
+    const w = welt();
+    w.ausfuehren('Math.random = () => { throw new Error("Math.random benutzt"); }');
+    const pws = Array.from({ length: 200 }, () => w.gs.zufallPasswort());
+    pws.forEach(pw => assert.match(pw, /^[a-km-np-zA-HJ-NP-Z2-9]{12}$/));
+    assert.equal(new Set(pws).size, 200);
+    // auch der echte Weg über die Verwaltung
+    const r = post(w, { session: 'T-ADMIN', action: 'admin_neu', email: 'neu@x.ch', name: 'Neu', mail: false });
+    assert.equal(r.ok, true);
+    assert.match(r.pw, /^[a-km-np-zA-HJ-NP-Z2-9]{12}$/);
+  });
+});
+
+
+describe('Anmeldung und Sitzungen', () => {
+  function mitPasswort() {
+    const w = welt();
+    const ben = w.blatt('Benutzer');
+    ben.zeilen[1][2] = w.gs.hashPass('geheim123', 's');   // Admin
+    ben.zeilen[2][2] = w.gs.hashPass('geheim123', 's');   // Mia
+    return w;
+  }
+  const login = (w, email, passwort) => post(w, { action: 'login', email, passwort });
+
+  test('in Sessions steht nur der Hash, das Token selbst funktioniert', () => {
+    const w = mitPasswort();
+    const r = login(w, 'mia@x.ch', 'geheim123');
+    assert.equal(r.ok, true);
+    const zeile = w.blatt('Sessions').zeilen.at(-1);
+    assert.notEqual(zeile[0], r.session);
+    assert.equal(zeile[0], w.gs.tokenHash(r.session));
+    assert.equal(post(w, { session: r.session, action: 'stammdaten' }).ok, true);
+    assert.equal(post(w, { session: zeile[0], action: 'stammdaten' }).error, 'session', 'Hash allein reicht nicht');
+  });
+
+  test('alte Sitzung im Klartext funktioniert weiter und wird umgestellt', () => {
+    const w = welt();
+    assert.equal(post(w, { session: 'T-MIA', action: 'stammdaten' }).ok, true);
+    const zeile = w.blatt('Sessions').zeilen.find(z => z[1] === 'mia@x.ch');
+    assert.equal(zeile[0], w.gs.tokenHash('T-MIA'));
+    assert.equal(post(w, { session: 'T-MIA', action: 'stammdaten' }).ok, true);
+  });
+
+  test('Lesen per POST, ohne die Sperre zu belegen', () => {
+    const w = welt();
+    beleg(w);
+    const liste = post(w, { session: 'T-MIA', action: 'meine', monat: '8', jahr: '2026' });
+    w.zaehler.sperren = 0;
+    assert.equal(post(w, { session: 'T-MIA', action: 'stammdaten' }).ok, true);
+    assert.equal(post(w, { session: 'T-MIA', action: 'meine', monat: '8', jahr: '2026' }).belege.length, 1);
+    assert.equal(post(w, { session: 'T-MIA', action: 'bild', key: liste.belege[0].DedupKey }).ok, true);
+    assert.equal(w.zaehler.sperren, 0);
+    beleg(w, { brutto: 99 });
+    assert.equal(w.zaehler.sperren, 1, 'Schreiben belegt die Sperre');
+  });
+
+  test('ohne richtiges Passwort verrät die Antwort nichts über das Konto', () => {
+    const w = mitPasswort();
+    w.blatt('Benutzer').zeilen[2][4] = false;            // Mia inaktiv
+    assert.equal(login(w, 'niemand@x.ch', 'falsch').error, 'login');
+    assert.equal(login(w, 'admin@x.ch', 'falsch').error, 'login');
+    assert.equal(login(w, 'mia@x.ch', 'falsch').error, 'login', 'inaktiv erst mit richtigem Passwort');
+    assert.equal(login(w, 'mia@x.ch', 'geheim123').error, 'inaktiv');
+  });
+
+  test('gleiche Rechenzeit mit und ohne Konto', () => {
+    const w = mitPasswort();
+    w.zaehler.digest = 0; login(w, 'niemand@x.ch', 'falsch'); const ohne = w.zaehler.digest;
+    w.zaehler.digest = 0; login(w, 'admin@x.ch', 'falsch');   const mit  = w.zaehler.digest;
+    assert.ok(ohne >= 5000, 'auch ohne Konto wird gehasht');
+    assert.ok(Math.abs(ohne - mit) <= 2, ohne + ' / ' + mit);
+  });
+
+  test('Sperre nach MAX_FEHLER, mit und ohne Konto gleich', () => {
+    const w = mitPasswort();
+    const max = w.konst('MAX_FEHLER');
+    for (const email of ['niemand@x.ch', 'admin@x.ch']) {
+      const antworten = Array.from({ length: max + 1 }, () => login(w, email, 'falsch').error);
+      assert.deepEqual(antworten, [...Array(max).fill('login'), 'gesperrt'], email);
+    }
+    assert.equal(login(w, 'admin@x.ch', 'geheim123').error, 'gesperrt', 'auch mit richtigem Passwort');
+  });
+});
+
+
+describe('Fehlermeldungen', () => {
+  test('technische Details gehen ins Protokoll, nicht zum Client', () => {
+    const w = welt();
+    w.loeschen('Belege');
+    const r = beleg(w);
+    assert.equal(r.error, 'serverfehler');
+    assert.equal(JSON.stringify(r).includes('TypeError'), false);
+    assert.ok(w.konsole.some(z => z.includes('TypeError')), 'Details im Protokoll');
+    assert.equal(post(w, { session: 'T-MIA', action: 'meine', monat: '8', jahr: '2026' }).error, 'serverfehler');
+  });
+
+  test('Fehler beim Foto: nur der Code "bild"', () => {
+    const w = welt();
+    w.drive.ordner.clear();                              // Belegfotos-Ordner fehlt
+    const r = beleg(w);
+    assert.equal(r.error, 'bild');
+    assert.ok(w.konsole.some(z => z.startsWith('bildSpeichern')));
+  });
+
+  test('kaputte Anfrage', () => {
+    const w = welt();
+    assert.equal(json(w.gs.doPost({ postData: { contents: '{kein json' } })).error, 'anfrage');
   });
 });

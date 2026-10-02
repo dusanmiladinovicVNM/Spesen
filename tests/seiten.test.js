@@ -27,3 +27,10 @@ test('GitHub Action läuft nur mit Leserechten', () => {
   const yml = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'tests.yml'), 'utf8');
   assert.match(yml, /^permissions:\s*\n\s+contents: read\s*$/m);
 });
+
+test('index.html: jede id nur einmal', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(m => m[1]);
+  const doppelt = ids.filter((id, i) => ids.indexOf(id) !== i);
+  assert.deepEqual(doppelt, []);
+});

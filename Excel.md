@@ -1,12 +1,12 @@
 # Excel šablon
 
 `.xlsm` na SharePointu, list `Vorlage`. Šablon se ne prepravlja: podaci
-ulaze u skriveni list `Daten`, a šablon ih dohvata formulom.
+ulaze u skriveni list `Belege`, a šablon ih dohvata formulom.
 
 ![List Vorlage](excel/vorlage.png)
 
 ```
-Apps Script ─CSV─▶ Power Query (tabela Belege, list Daten) ─FILTER─▶ Vorlage B7:H31 i K7:K31
+Apps Script ─CSV─▶ Power Query (tabela i list Belege) ─FILTER─▶ Vorlage B7:H31 i K7:K31
 klik na J ─▶ foto.html (GitHub Pages) ─fetch─▶ Apps Script ─▶ download u Downloads
 ```
 
@@ -20,6 +20,8 @@ klik na J ─▶ foto.html (GitHub Pages) ─fetch─▶ Apps Script ─▶ down
    <Web-App-URL>?token=<TOKEN_READ>&format=csv
    ```
 
+   `TOKEN_READ` daje funkcija `tokenErneuern` u Apps Scriptu (README, Faza 2).
+
    Autentifikacija: **Anonym**
 
 2. **Erste Zeile als Überschriften verwenden**
@@ -30,7 +32,7 @@ klik na J ─▶ foto.html (GitHub Pages) ─fetch─▶ Apps Script ─▶ down
 5. Upit preimenuj u **`Belege`**. Naziv upita postaje naziv tabele,
    a formule u šablonu referišu `Belege[…]`.
 6. **Schließen und laden in… → Tabelle → Neues Arbeitsblatt**,
-   list nazovi `Daten` i sakrij ga
+   list nazovi `Belege` i sakrij ga
 
 Filtriranje storniranih i deljenje `MwstSatz` sa 100 **ne rade se ovde**,
 jer ih Apps Script već isporučuje gotove.
